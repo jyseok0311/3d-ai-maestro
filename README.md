@@ -3,6 +3,11 @@
 물류센터 3곳을 실시간 전략(RTS) 게임처럼 내려다보며 관제하는 3D 창고 관리 앱입니다.
 React Three Fiber + drei + Zustand + TypeScript + Vite.
 
+- **라이브 데모:** https://3d-ai-maestro.vercel.app
+- **GitHub:** https://github.com/jyseok0311/3d-ai-maestro
+
+`main` 브랜치에 푸시하면 Vercel이 자동으로 프로덕션에 배포합니다.
+
 ## 실행
 
 ```bash
