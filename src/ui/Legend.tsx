@@ -1,9 +1,10 @@
-import { DOCK_STATUS, FORKLIFT_STATUS, TRUCK_STATUS } from '../theme';
+import { ASSISTANT_STATUS, COHORT_STATUS, ROOM_STATUS, TRACK } from '../theme';
 
 const groups = [
-  { title: '트럭', items: Object.values(TRUCK_STATUS) },
-  { title: '지게차', items: Object.values(FORKLIFT_STATUS) },
-  { title: '도크', items: Object.values(DOCK_STATUS) },
+  { title: '차수', items: Object.values(COHORT_STATUS) },
+  { title: '과정', items: Object.values(TRACK) },
+  { title: '로봇', items: Object.values(ASSISTANT_STATUS) },
+  { title: '교육실', items: Object.values(ROOM_STATUS) },
 ];
 
 export function Legend() {

@@ -9,16 +9,16 @@ interface Props {
   id: string;
   x: number;
   z: number;
-  lifting: boolean;
+  assisting: boolean;
   statusColor: string;
   selected: boolean;
   onSelect: (id: string) => void;
 }
 
-/** Low-poly forklift. Drives at constant speed towards (x, z) and faces its heading. */
-export const ForkliftModel = memo(function ForkliftModel(p: Props) {
+/** Low-poly teaching-assistant robot with a lifting tray for devices and kits. */
+export const RobotModel = memo(function RobotModel(p: Props) {
   const group = useRef<THREE.Group>(null);
-  const forks = useRef<THREE.Group>(null);
+  const tray = useRef<THREE.Group>(null);
   // Initial position only: later moves are animated in useFrame, not via props.
   const [initial] = useState<[number, number, number]>(() => [p.x, 0.1, p.z]);
   const [hovered, setHovered] = useState(false);
@@ -38,9 +38,9 @@ export const ForkliftModel = memo(function ForkliftModel(p: Props) {
       g.position.z += (dz / dist) * step;
       g.rotation.y = dampAngle(g.rotation.y, Math.atan2(dx, dz), 8, d);
     }
-    if (forks.current) {
-      const target = p.lifting ? 1.1 + Math.sin(state.clock.elapsedTime * 1.5) * 0.9 : 0.15;
-      forks.current.position.y = THREE.MathUtils.damp(forks.current.position.y, target, 3, d);
+    if (tray.current) {
+      const target = p.assisting ? 1.25 + Math.sin(state.clock.elapsedTime * 1.5) * 0.35 : 0.95;
+      tray.current.position.y = THREE.MathUtils.damp(tray.current.position.y, target, 3, d);
     }
   });
 
@@ -58,41 +58,32 @@ export const ForkliftModel = memo(function ForkliftModel(p: Props) {
       onPointerOver={(e) => (e.stopPropagation(), setHovered(true))}
       onPointerOut={() => setHovered(false)}
     >
-      {/* body + counterweight */}
-      <mesh geometry={GEO.box} material={MAT.forkliftBody} position={[0, 0.65, -0.1]} scale={[1.2, 0.8, 1.7]} castShadow>
+      {/* drive base */}
+      <mesh geometry={GEO.box} material={MAT.robotDark} position={[0, 0.3, 0]} scale={[1.2, 0.4, 1.4]} castShadow>
         {outline}
       </mesh>
-      <mesh geometry={GEO.box} material={MAT.forkliftDark} position={[0, 0.75, -0.95]} scale={[1.2, 0.9, 0.3]} castShadow />
-      {/* overhead guard */}
-      <mesh geometry={GEO.box} material={MAT.forkliftDark} position={[0, 2.05, -0.2]} scale={[1.15, 0.08, 1.2]} castShadow>
+      {/* torso */}
+      <mesh geometry={GEO.box} material={MAT.robotShell} position={[0, 1.05, -0.25]} scale={[0.9, 1.1, 0.7]} castShadow>
         {outline}
       </mesh>
-      {[-0.52, 0.52].map((x) => (
-        <mesh key={x} geometry={GEO.box} material={MAT.forkliftDark} position={[x, 1.55, 0.35]} scale={[0.08, 1.0, 0.08]} />
-      ))}
-      {/* mast */}
-      {[-0.4, 0.4].map((x) => (
-        <mesh key={x} geometry={GEO.box} material={MAT.forkliftDark} position={[x, 1.3, 0.85]} scale={[0.1, 2.4, 0.12]} castShadow>
-          {outline}
-        </mesh>
-      ))}
-      {/* forks */}
-      <group ref={forks} position={[0, 0.15, 0]}>
-        {[-0.3, 0.3].map((x) => (
-          <mesh key={x} geometry={GEO.box} material={MAT.forks} position={[x, 0, 1.45]} scale={[0.12, 0.06, 1.1]} castShadow />
-        ))}
-        <mesh geometry={GEO.box} material={MAT.forks} position={[0, 0.3, 0.92]} scale={[0.9, 0.6, 0.05]} />
+      {/* head with face screen */}
+      <mesh geometry={GEO.box} material={MAT.robotShell} position={[0, 1.95, -0.25]} scale={[0.75, 0.55, 0.6]} castShadow>
+        {outline}
+      </mesh>
+      <mesh geometry={GEO.box} material={lampMaterial(p.statusColor)} position={[0, 1.97, 0.06]} scale={[0.55, 0.3, 0.02]} />
+      {/* lifting tray with a kit box */}
+      <group ref={tray} position={[0, 0.95, 0]}>
+        <mesh geometry={GEO.box} material={MAT.tray} position={[0, 0, 0.45]} scale={[1.0, 0.06, 0.7]} castShadow />
+        <mesh geometry={GEO.box} material={MAT.trim} position={[0, 0.2, 0.45]} scale={[0.6, 0.34, 0.45]} castShadow />
       </group>
-      {/* wheels */}
       {[
         [-0.62, 0.45],
         [0.62, 0.45],
-        [-0.62, -0.6],
-        [0.62, -0.6],
+        [-0.62, -0.45],
+        [0.62, -0.45],
       ].map(([x, z], i) => (
-        <mesh key={i} geometry={GEO.wheel} material={MAT.tire} position={[x, 0.3, z]} scale={0.6} />
+        <mesh key={i} geometry={GEO.wheel} material={MAT.tire} position={[x, 0.22, z]} scale={0.45} />
       ))}
-      <mesh geometry={GEO.lamp} material={lampMaterial(p.statusColor)} position={[0, 2.25, -0.2]} scale={0.8} />
       {p.selected && <SelectionRing radius={1.9} />}
     </group>
   );

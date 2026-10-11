@@ -3,11 +3,11 @@ import { useFrame } from '@react-three/fiber';
 import { Edges } from '@react-three/drei';
 import * as THREE from 'three';
 import { SELECT_RING } from './assets';
-import { AMBER } from '../theme';
+import { ACCENT } from '../theme';
 
 /** Amber edge outline; drop inside any selected box mesh. */
 export function SelectedEdges() {
-  return <Edges color={AMBER} lineWidth={2.5} threshold={20} renderOrder={10} />;
+  return <Edges color={ACCENT} lineWidth={2.5} threshold={20} renderOrder={10} />;
 }
 
 /** Pulsing ground ring under a selected object. */
@@ -20,7 +20,7 @@ export function SelectionRing({ radius }: { radius: number }) {
   });
   return (
     <mesh ref={ring} geometry={SELECT_RING} position-y={0.15} raycast={() => null}>
-      <meshBasicMaterial color={AMBER} transparent opacity={0.85} toneMapped={false} depthWrite={false} />
+      <meshBasicMaterial color={ACCENT} transparent opacity={0.85} toneMapped={false} depthWrite={false} />
     </mesh>
   );
 }

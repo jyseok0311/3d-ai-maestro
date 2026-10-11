@@ -1,75 +1,75 @@
-import type { InventoryItem, Shipment, Truck, WorldData } from '../data/types';
-import type { Filters, SiteFilter } from './useWarehouseStore';
+import type { Cohort, Material, Session, WorldData } from '../data/types';
+import type { CampusFilter, Filters } from './useMaestroStore';
 
-export const isLowStock = (item: InventoryItem) => item.quantity <= item.reorderPoint;
+export const isLowStock = (m: Material) => m.quantity <= m.reorderPoint;
 
-const inSite = (siteId: SiteFilter) => (x: { siteId: string }) => siteId === 'all' || x.siteId === siteId;
+const inCampus = (campusId: CampusFilter) => (x: { campusId: string }) => campusId === 'all' || x.campusId === campusId;
 
 export interface Kpis {
   onTimeRate: number | null;
   onTimeCount: number;
-  arrivedCount: number;
-  docksInUse: number;
-  docksTotal: number;
-  activeTrucks: number;
-  trucksTotal: number;
+  checkedInCount: number;
+  roomsInUse: number;
+  roomsTotal: number;
+  activeCohorts: number;
+  cohortsTotal: number;
   lowStock: number;
-  delayed: number;
+  late: number;
 }
 
 export function computeKpis(
-  world: Pick<WorldData, 'docks' | 'trucks' | 'inventory' | 'shipments'>,
-  siteId: SiteFilter,
+  world: Pick<WorldData, 'rooms' | 'cohorts' | 'materials' | 'sessions'>,
+  campusId: CampusFilter,
 ): Kpis {
-  const f = inSite(siteId);
-  const shipments = Object.values(world.shipments).filter(f);
-  const arrived = shipments.filter((s) => s.arrivedAt !== null);
-  const onTime = arrived.filter((s) => (s.arrivedAt as number) <= s.eta);
-  const docks = Object.values(world.docks).filter(f);
-  const trucks = Object.values(world.trucks).filter(f);
+  const f = inCampus(campusId);
+  const sessions = Object.values(world.sessions).filter(f);
+  const checkedIn = sessions.filter((s) => s.checkedInAt !== null);
+  const onTime = checkedIn.filter((s) => (s.checkedInAt as number) <= s.startAt);
+  const rooms = Object.values(world.rooms).filter(f);
+  const cohorts = Object.values(world.cohorts).filter(f);
   return {
-    onTimeRate: arrived.length ? onTime.length / arrived.length : null,
+    onTimeRate: checkedIn.length ? onTime.length / checkedIn.length : null,
     onTimeCount: onTime.length,
-    arrivedCount: arrived.length,
-    docksInUse: docks.filter((d) => d.status === 'occupied').length,
-    docksTotal: docks.length,
-    activeTrucks: trucks.filter((t) => t.status !== 'idle').length,
-    trucksTotal: trucks.length,
-    lowStock: Object.values(world.inventory).filter(f).filter(isLowStock).length,
-    delayed: shipments.filter((s) => s.status === 'delayed').length,
+    checkedInCount: checkedIn.length,
+    roomsInUse: rooms.filter((r) => r.status === 'in_session').length,
+    roomsTotal: rooms.length,
+    activeCohorts: cohorts.filter((c) => c.status !== 'break').length,
+    cohortsTotal: cohorts.length,
+    lowStock: Object.values(world.materials).filter(f).filter(isLowStock).length,
+    late: sessions.filter((s) => s.status === 'late').length,
   };
 }
 
-/** Whether a truck passes the current filters (used to hide it in the scene). */
-export function truckMatches(truck: Truck, shipments: Record<string, Shipment>, filters: Filters): boolean {
-  if (filters.truckStatus !== 'all' && truck.status !== filters.truckStatus) return false;
-  if (filters.delayedOnly) {
-    const s = truck.shipmentId ? shipments[truck.shipmentId] : null;
-    if (!s || s.status !== 'delayed') return false;
+/** Whether a cohort passes the current filters (used to hide it in the scene). */
+export function cohortMatches(cohort: Cohort, sessions: Record<string, Session>, filters: Filters): boolean {
+  if (filters.cohortStatus !== 'all' && cohort.status !== filters.cohortStatus) return false;
+  if (filters.lateOnly) {
+    const s = cohort.sessionId ? sessions[cohort.sessionId] : null;
+    if (!s || s.status !== 'late') return false;
   }
   return true;
 }
 
-/** Shipments shown in the side list, most urgent first. */
-export function listShipments(
-  shipments: Record<string, Shipment>,
-  siteId: SiteFilter,
+/** Sessions shown in the side list, most urgent first. */
+export function listSessions(
+  sessions: Record<string, Session>,
+  campusId: CampusFilter,
   filters: Filters,
-  trucks: Record<string, Truck>,
-): Shipment[] {
-  const rank = { delayed: 0, at_dock: 1, in_transit: 2, scheduled: 3, completed: 4 } as const;
-  return Object.values(shipments)
-    .filter(inSite(siteId))
-    .filter((s) => (filters.delayedOnly ? s.status === 'delayed' : s.status !== 'completed'))
+  cohorts: Record<string, Cohort>,
+): Session[] {
+  const rank = { late: 0, in_progress: 1, moving: 2, scheduled: 3, completed: 4 } as const;
+  return Object.values(sessions)
+    .filter(inCampus(campusId))
+    .filter((s) => (filters.lateOnly ? s.status === 'late' : s.status !== 'completed'))
     .filter((s) => {
-      if (filters.truckStatus === 'all') return true;
-      const t = s.truckId ? trucks[s.truckId] : null;
-      return t?.status === filters.truckStatus;
+      if (filters.cohortStatus === 'all') return true;
+      const c = s.cohortId ? cohorts[s.cohortId] : null;
+      return c?.status === filters.cohortStatus;
     })
-    .sort((a, b) => rank[a.status] - rank[b.status] || a.eta - b.eta);
+    .sort((a, b) => rank[a.status] - rank[b.status] || a.startAt - b.startAt);
 }
 
-export function parseRackKey(key: string) {
-  const [siteId, aisle, bay] = key.split(':');
-  return { siteId, aisle, bay: Number(bay) };
+export function parseCabinetKey(key: string) {
+  const [campusId, aisle, bay] = key.split(':');
+  return { campusId, aisle, bay: Number(bay) };
 }

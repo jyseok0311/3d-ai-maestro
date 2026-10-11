@@ -1,24 +1,24 @@
 import type { Vec2 } from './types';
 
 /**
- * Shared site-local floor plan. Every site uses the same layout, so both the
- * simulation (forklift routes) and the 3D scene read from here.
+ * Shared campus-local floor plan. Every campus uses the same layout, so both
+ * the simulation (robot routes) and the 3D scene read from here.
  *
- *            z = -26  ┌──────────── building ────────────┐
- *   rack rows A–F     │ ▤▤▤▤▤  ▤▤▤▤▤        staging zone │
- *                     │ ▤▤▤▤▤  ▤▤▤▤▤          ⚡ charger  │
- *            z =  14  └──D1───D2───D3───D4───D5───D6─────┘  dock wall
- *                          trucks at docks
- *            z =  31     queue lane
- *            z =  41  ═══════════ road ═══════════
- *   All truck slots lie in the yard (z > 14), so straight moves between
- *   them never cross the building.
+ *            z = -26  ┌────────── training centre ──────────┐
+ *   cabinet rows A–F  │ ▤▤▤▤▤  ▤▤▤▤▤      practice prep zone │
+ *                     │ ▤▤▤▤▤  ▤▤▤▤▤            ⚡ charger  │
+ *            z =  14  └──R1───R2───R3───R4───R5───R6───────┘  front entrances
+ *                       [glass classroom pods R1–R6]
+ *            z =  31     lobby queue                     lounge →
+ *            z =  41  ═══════════ campus walkway ═══════════
+ *   All cohort slots lie outside the building (z > 14), so straight moves
+ *   between them never cross it.
  */
 
-export const SITE_SPACING = 125;
+export const CAMPUS_SPACING = 125;
 
 export const BUILDING = { minX: -36, maxX: 36, minZ: -26, maxZ: 14 } as const;
-export const DOCK_WALL_Z = BUILDING.maxZ;
+export const FRONT_Z = BUILDING.maxZ;
 
 export const AISLES = ['A', 'B', 'C', 'D', 'E', 'F'] as const;
 export const BAYS = 10;
@@ -31,27 +31,29 @@ export function rackX(bay: number): number {
   return j < 5 ? -30 + j * 3 : -9 + (j - 5) * 3;
 }
 
-/** Cross aisles where forklifts can change rack rows. */
+/** Cross aisles where robots can change cabinet rows. */
 export const CROSS_AISLE_X = [-13.5, 8];
-/** z values of the travel aisles between rack rows. */
+/** z values of the travel aisles between cabinet rows. */
 export const TRAVEL_AISLE_Z = RACK_ROW_Z.slice(0, -1).map((z) => z + 2.5);
 
-export const STAGING = { minX: 11, maxX: 33, minZ: -23, maxZ: 10 } as const;
+export const PREP_ZONE = { minX: 11, maxX: 33, minZ: -23, maxZ: 10 } as const;
 export const CHARGER: Vec2 = { x: 31, z: -22 };
 
-export const DOCK_COUNT = 6;
-export function dockX(index: number): number {
+export const ROOM_COUNT = 6;
+export function roomX(index: number): number {
   return -27.5 + index * 11;
 }
+/** Classroom pod footprint, in front of each entrance. */
+export const POD = { w: 9, d: 8.6 } as const;
+export const POD_CENTER_Z = FRONT_Z + 0.7 + POD.d / 2;
 
-export const TRUCK_LENGTH = 9;
-export const QUEUE_Z = 31;
-export const ROAD_Z = 41;
-/** Idle trucks park in the south-east yard, outside the building. */
-export const PARKING_X = 48;
-export const PARKING_Z = 18;
+export const LOBBY_Z = 31;
+export const WALKWAY_Z = 41;
+/** Cohorts on a break gather in the south-east lounge, outside the building. */
+export const LOUNGE_X = 48;
+export const LOUNGE_Z = 18;
 
-export function worldBounds(siteCount: number) {
-  const half = ((siteCount - 1) / 2) * SITE_SPACING + 55;
+export function worldBounds(campusCount: number) {
+  const half = ((campusCount - 1) / 2) * CAMPUS_SPACING + 55;
   return { minX: -half, maxX: half, minZ: -60, maxZ: 75 };
 }

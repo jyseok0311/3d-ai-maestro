@@ -1,15 +1,15 @@
 import { useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { useWarehouseStore } from '../store/useWarehouseStore';
+import { useMaestroStore } from '../store/useMaestroStore';
 import { computeKpis } from '../store/selectors';
 import { clock, pct } from './format';
 
 export function TopBar() {
-  const { sites, siteId, setSite, running, setRunning, now } = useWarehouseStore(
+  const { campuses, campusId, setCampus, running, setRunning, now } = useMaestroStore(
     useShallow((s) => ({
-      sites: s.sites,
-      siteId: s.siteId,
-      setSite: s.setSite,
+      campuses: s.campuses,
+      campusId: s.campusId,
+      setCampus: s.setCampus,
       running: s.running,
       setRunning: s.setRunning,
       now: s.now,
@@ -21,19 +21,19 @@ export function TopBar() {
       <div className="brand">
         <div className="logo">◆</div>
         <div>
-          <div className="brand-title">3D AI MAESTRO</div>
-          <div className="brand-sub">WareTrack · 물류센터 관제</div>
+          <div className="brand-title">AI MAESTRO</div>
+          <div className="brand-sub">교직원 AI 교육 운영 관제</div>
         </div>
       </div>
 
-      <nav className="site-tabs" aria-label="사이트 선택">
-        <button className={siteId === 'all' ? 'active' : ''} onClick={() => setSite('all')}>
+      <nav className="site-tabs" aria-label="캠퍼스 선택">
+        <button className={campusId === 'all' ? 'active' : ''} onClick={() => setCampus('all')}>
           전체
         </button>
-        {Object.values(sites).map((s) => (
-          <button key={s.id} className={siteId === s.id ? 'active' : ''} onClick={() => setSite(s.id)} title={s.city}>
-            <span className="code">{s.code}</span>
-            {s.name}
+        {Object.values(campuses).map((c) => (
+          <button key={c.id} className={campusId === c.id ? 'active' : ''} onClick={() => setCampus(c.id)} title={c.address}>
+            <span className="code">{c.code}</span>
+            {c.name.replace(' AI교육관', '')}
           </button>
         ))}
       </nav>
@@ -52,32 +52,32 @@ export function TopBar() {
 }
 
 function KpiCards() {
-  const { docks, trucks, inventory, shipments, siteId } = useWarehouseStore(
+  const { rooms, cohorts, materials, sessions, campusId } = useMaestroStore(
     useShallow((s) => ({
-      docks: s.docks,
-      trucks: s.trucks,
-      inventory: s.inventory,
-      shipments: s.shipments,
-      siteId: s.siteId,
+      rooms: s.rooms,
+      cohorts: s.cohorts,
+      materials: s.materials,
+      sessions: s.sessions,
+      campusId: s.campusId,
     })),
   );
   const k = useMemo(
-    () => computeKpis({ docks, trucks, inventory, shipments }, siteId),
-    [docks, trucks, inventory, shipments, siteId],
+    () => computeKpis({ rooms, cohorts, materials, sessions }, campusId),
+    [rooms, cohorts, materials, sessions, campusId],
   );
   const onTimeTone = k.onTimeRate === null ? '' : k.onTimeRate >= 0.9 ? 'good' : k.onTimeRate >= 0.75 ? 'warn' : 'bad';
 
   return (
     <div className="kpis">
-      <Kpi label="정시 도착률" value={pct(k.onTimeRate)} sub={`${k.onTimeCount}/${k.arrivedCount}건 · 지연 ${k.delayed}`} tone={onTimeTone} />
+      <Kpi label="정시 입실률" value={pct(k.onTimeRate)} sub={`${k.onTimeCount}/${k.checkedInCount}회 · 지연 ${k.late}`} tone={onTimeTone} />
       <Kpi
-        label="도크 사용"
-        value={`${k.docksInUse}/${k.docksTotal}`}
-        sub="사용 중 / 전체"
-        meter={k.docksTotal ? k.docksInUse / k.docksTotal : 0}
+        label="교육실 사용"
+        value={`${k.roomsInUse}/${k.roomsTotal}`}
+        sub="교육 중 / 전체"
+        meter={k.roomsTotal ? k.roomsInUse / k.roomsTotal : 0}
       />
-      <Kpi label="운행 트럭" value={`${k.activeTrucks}`} sub={`전체 ${k.trucksTotal}대 중`} />
-      <Kpi label="재고 부족 알림" value={`${k.lowStock}`} sub="재주문점 이하 SKU" tone={k.lowStock > 0 ? 'bad' : 'good'} />
+      <Kpi label="진행 중 차수" value={`${k.activeCohorts}`} sub={`전체 ${k.cohortsTotal}개 반 중`} />
+      <Kpi label="부족 교보재" value={`${k.lowStock}`} sub="재주문점 이하 품목" tone={k.lowStock > 0 ? 'bad' : 'good'} />
     </div>
   );
 }

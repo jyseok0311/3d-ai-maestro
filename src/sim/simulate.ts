@@ -2,201 +2,200 @@ import {
   BAYS,
   CHARGER,
   CROSS_AISLE_X,
-  STAGING,
+  FRONT_Z,
+  PREP_ZONE,
   TRAVEL_AISLE_Z,
-  dockX,
-  DOCK_WALL_Z,
   rackX,
+  roomX,
 } from '../data/layout';
-import type { Dock, Forklift, Shipment, Truck, Vec2, WorldData } from '../data/types';
+import { SESSION_TITLES } from '../data/seed';
+import type { Assistant, Cohort, Room, Session, Vec2, WorldData } from '../data/types';
 
-/** Completed shipments kept for the rolling on-time KPI. */
+/** Completed sessions kept for the rolling on-time KPI. */
 const MAX_COMPLETED = 40;
 
 /**
  * One step of the live simulation. Pure: returns a new WorldData and only
  * replaces the records that actually changed, so React components that
- * subscribe to a single truck or forklift re-render only when it moves.
+ * subscribe to a single cohort or robot re-render only when it changes.
  */
 export function simulateTick(world: WorldData, now: number, rand: () => number): WorldData {
-  const docks = { ...world.docks };
-  const trucks = { ...world.trucks };
-  const shipments = { ...world.shipments };
-  const inventory = { ...world.inventory };
-  const forklifts = { ...world.forklifts };
+  const rooms = { ...world.rooms };
+  const cohorts = { ...world.cohorts };
+  const sessions = { ...world.sessions };
+  const materials = { ...world.materials };
+  const assistants = { ...world.assistants };
 
   const chance = (p: number) => rand() < p;
   const pick = <T,>(arr: readonly T[]) => arr[Math.floor(rand() * arr.length)];
-  const patchTruck = (t: Truck, p: Partial<Truck>) => (trucks[t.id] = { ...t, ...p, lastUpdate: now });
-  const patchDock = (d: Dock, p: Partial<Dock>) => (docks[d.id] = { ...d, ...p, lastUpdate: now });
-  const patchShipment = (s: Shipment, p: Partial<Shipment>) => (shipments[s.id] = { ...s, ...p, lastUpdate: now });
-  const patchForklift = (f: Forklift, p: Partial<Forklift>) => (forklifts[f.id] = { ...f, ...p, lastUpdate: now });
+  const patchCohort = (c: Cohort, p: Partial<Cohort>) => (cohorts[c.id] = { ...c, ...p, lastUpdate: now });
+  const patchRoom = (r: Room, p: Partial<Room>) => (rooms[r.id] = { ...r, ...p, lastUpdate: now });
+  const patchSession = (s: Session, p: Partial<Session>) => (sessions[s.id] = { ...s, ...p, lastUpdate: now });
+  const patchAssistant = (a: Assistant, p: Partial<Assistant>) => (assistants[a.id] = { ...a, ...p, lastUpdate: now });
 
-  let shipmentSeq = Math.max(0, ...Object.keys(shipments).map((id) => Number(id.split('-')[1]) || 0));
+  let sessionSeq = Math.max(0, ...Object.keys(sessions).map((id) => Number(id.split('-')[1]) || 0));
 
-  // ── Trucks: idle → en_route → queued → docked → (un)loading → departing → idle
-  for (const id of Object.keys(trucks)) {
-    const truck = trucks[id];
-    const shipment = truck.shipmentId ? shipments[truck.shipmentId] : null;
+  // ── Cohorts: break → moving → waiting → checked_in → lecture/practice → leaving → break
+  for (const id of Object.keys(cohorts)) {
+    const cohort = cohorts[id];
+    const session = cohort.sessionId ? sessions[cohort.sessionId] : null;
 
-    switch (truck.status) {
-      case 'idle': {
+    switch (cohort.status) {
+      case 'break': {
         if (!chance(0.12)) break;
-        let next = Object.values(shipments).find(
-          (s) => s.siteId === truck.siteId && !s.truckId && !s.arrivedAt && (s.status === 'scheduled' || s.status === 'delayed'),
+        let next = Object.values(sessions).find(
+          (s) => s.campusId === cohort.campusId && !s.cohortId && !s.checkedInAt && (s.status === 'scheduled' || s.status === 'late'),
         );
         if (!next) {
-          shipmentSeq += 1;
-          const direction = chance(0.5) ? 'inbound' : 'outbound';
-          const siteItems = Object.values(inventory).filter((it) => it.siteId === truck.siteId);
+          sessionSeq += 1;
+          const campusMaterials = Object.values(materials).filter((m) => m.campusId === cohort.campusId);
           next = {
-            id: `shp-${String(shipmentSeq).padStart(3, '0')}`,
-            reference: `${direction === 'inbound' ? 'IN' : 'OUT'}-2610-${String(shipmentSeq).padStart(4, '0')}`,
-            siteId: truck.siteId,
-            direction,
+            id: `ses-${String(sessionSeq).padStart(3, '0')}`,
+            reference: `S-2610-${String(sessionSeq).padStart(4, '0')}`,
+            title: pick(SESSION_TITLES[cohort.track]),
+            campusId: cohort.campusId,
+            kind: chance(0.5) ? 'lecture' : 'practice',
             status: 'scheduled',
-            truckId: null,
-            dockId: null,
-            lines: [{ itemId: pick(siteItems).id, quantity: 5 + Math.floor(rand() * 8) * 5 }],
-            // Tight promises (sim time is compressed), so some arrive late.
-            eta: now + (8 + Math.floor(rand() * 24)) * 1000,
-            arrivedAt: null,
+            cohortId: null,
+            roomId: null,
+            lines: [{ materialId: pick(campusMaterials).id, quantity: 5 + Math.floor(rand() * 3) * 5 }],
+            // Tight schedule (sim time is compressed), so some classes arrive late.
+            startAt: now + (8 + Math.floor(rand() * 24)) * 1000,
+            checkedInAt: null,
             lastUpdate: now,
           };
         }
-        patchShipment(next, { status: next.eta < now ? 'delayed' : 'in_transit', truckId: truck.id });
-        patchTruck(truck, { status: 'en_route', shipmentId: next.id });
+        patchSession(next, { status: next.startAt < now ? 'late' : 'moving', cohortId: cohort.id });
+        patchCohort(cohort, { status: 'moving', sessionId: next.id });
         break;
       }
-      case 'en_route':
-        if (chance(0.25)) patchTruck(truck, { status: 'queued' });
+      case 'moving':
+        if (chance(0.25)) patchCohort(cohort, { status: 'waiting' });
         break;
-      case 'queued': {
-        const dock = Object.values(docks).find(
-          (d) => d.siteId === truck.siteId && d.status === 'free' && !d.truckId,
+      case 'waiting': {
+        const room = Object.values(rooms).find(
+          (r) => r.campusId === cohort.campusId && r.status === 'free' && !r.cohortId,
         );
-        if (!dock || !chance(0.6)) break;
-        patchDock(dock, { status: 'occupied', truckId: truck.id });
-        patchTruck(truck, { status: 'docked', dockId: dock.id });
-        if (shipment) patchShipment(shipment, { status: 'at_dock', dockId: dock.id, arrivedAt: now });
+        if (!room || !chance(0.6)) break;
+        patchRoom(room, { status: 'in_session', cohortId: cohort.id });
+        patchCohort(cohort, { status: 'checked_in', roomId: room.id });
+        if (session) patchSession(session, { status: 'in_progress', roomId: room.id, checkedInAt: now });
         break;
       }
-      case 'docked':
-        if (chance(0.45)) {
-          patchTruck(truck, { status: shipment?.direction === 'inbound' ? 'unloading' : 'loading' });
-        }
+      case 'checked_in':
+        if (chance(0.45)) patchCohort(cohort, { status: session?.kind === 'practice' ? 'practice' : 'lecture' });
         break;
-      case 'loading':
-      case 'unloading': {
+      case 'lecture':
+      case 'practice': {
         if (!chance(0.22)) break;
-        if (shipment) {
-          const sign = shipment.direction === 'inbound' ? 1 : -1;
-          for (const line of shipment.lines) {
-            const item = inventory[line.itemId];
-            if (item) inventory[item.id] = { ...item, quantity: Math.max(0, item.quantity + sign * line.quantity) };
+        if (session) {
+          // Materials handed out during the class leave the cabinets.
+          for (const line of session.lines) {
+            const m = materials[line.materialId];
+            if (m) materials[m.id] = { ...m, quantity: Math.max(0, m.quantity - line.quantity) };
           }
-          patchShipment(shipment, { status: 'completed', truckId: null });
+          patchSession(session, { status: 'completed', cohortId: null });
         }
-        const dock = truck.dockId ? docks[truck.dockId] : null;
-        if (dock) patchDock(dock, { status: 'free', truckId: null });
-        patchTruck(truck, { status: 'departing', dockId: null, shipmentId: null });
+        const room = cohort.roomId ? rooms[cohort.roomId] : null;
+        if (room) patchRoom(room, { status: 'free', cohortId: null });
+        patchCohort(cohort, { status: 'leaving', roomId: null, sessionId: null });
         break;
       }
-      case 'departing':
-        if (chance(0.4)) patchTruck(truck, { status: 'idle' });
+      case 'leaving':
+        if (chance(0.4)) patchCohort(cohort, { status: 'break' });
         break;
     }
   }
 
-  // ── Shipments: flag late arrivals.
-  for (const s of Object.values(shipments)) {
-    if ((s.status === 'in_transit' || s.status === 'scheduled') && s.eta < now) {
-      patchShipment(s, { status: 'delayed' });
+  // ── Sessions: flag classes that missed their start time.
+  for (const s of Object.values(sessions)) {
+    if ((s.status === 'moving' || s.status === 'scheduled') && s.startAt < now) {
+      patchSession(s, { status: 'late' });
     }
   }
 
-  // ── Keep a rolling history: drop the oldest completed shipments.
-  const completed = Object.values(shipments)
+  // ── Keep a rolling history: drop the oldest completed sessions.
+  const completed = Object.values(sessions)
     .filter((s) => s.status === 'completed')
     .sort((a, b) => b.lastUpdate - a.lastUpdate);
-  for (const s of completed.slice(MAX_COMPLETED)) delete shipments[s.id];
+  for (const s of completed.slice(MAX_COMPLETED)) delete sessions[s.id];
 
-  // ── Docks: occasional maintenance windows.
-  for (const dock of Object.values(docks)) {
-    if (dock.status === 'free' && chance(0.004)) patchDock(dock, { status: 'maintenance' });
-    else if (dock.status === 'maintenance' && chance(0.08)) patchDock(dock, { status: 'free' });
+  // ── Rooms: occasional equipment checks.
+  for (const room of Object.values(rooms)) {
+    if (room.status === 'free' && chance(0.004)) patchRoom(room, { status: 'maintenance' });
+    else if (room.status === 'maintenance' && chance(0.08)) patchRoom(room, { status: 'free' });
   }
 
-  // ── Replenishment: low items at a site slowly get restocked.
-  for (const item of Object.values(inventory)) {
-    if (item.quantity <= item.reorderPoint && chance(0.03)) {
-      inventory[item.id] = { ...item, quantity: item.quantity + item.reorderPoint * 2 };
+  // ── Restocking: low materials get replenished from time to time.
+  for (const m of Object.values(materials)) {
+    if (m.quantity <= m.reorderPoint && chance(0.05)) {
+      materials[m.id] = { ...m, quantity: m.quantity + m.reorderPoint * 3 };
     }
   }
 
-  // ── Forklifts.
-  const atDockBySite = new Map<string, Shipment[]>();
-  for (const s of Object.values(shipments)) {
-    if (s.status !== 'at_dock') continue;
-    atDockBySite.set(s.siteId, [...(atDockBySite.get(s.siteId) ?? []), s]);
+  // ── Assistant robots.
+  const activeByCampus = new Map<string, Session[]>();
+  for (const s of Object.values(sessions)) {
+    if (s.status !== 'in_progress') continue;
+    activeByCampus.set(s.campusId, [...(activeByCampus.get(s.campusId) ?? []), s]);
   }
 
-  for (const id of Object.keys(forklifts)) {
-    const fl = forklifts[id];
-    const drain = fl.status === 'moving' ? 1.6 : fl.status === 'lifting' ? 2.2 : 0.2;
+  for (const id of Object.keys(assistants)) {
+    const bot = assistants[id];
+    const drain = bot.status === 'moving' ? 1.6 : bot.status === 'assisting' ? 2.2 : 0.2;
 
-    switch (fl.status) {
+    switch (bot.status) {
       case 'fault':
-        if (chance(0.15)) patchForklift(fl, { status: 'idle' });
+        if (chance(0.15)) patchAssistant(bot, { status: 'idle' });
         break;
       case 'charging':
-        if (dist(fl.position, CHARGER) > 0.1) {
-          patchForklift(fl, { position: stepTowards(fl.position, CHARGER, 6), target: { ...CHARGER } });
-        } else if (fl.battery >= 95) {
-          patchForklift(fl, { status: 'idle', battery: 100 });
+        if (dist(bot.position, CHARGER) > 0.1) {
+          patchAssistant(bot, { position: stepTowards(bot.position, CHARGER, 6), target: { ...CHARGER } });
+        } else if (bot.battery >= 95) {
+          patchAssistant(bot, { status: 'idle', battery: 100 });
         } else {
-          patchForklift(fl, { battery: Math.min(100, fl.battery + 9) });
+          patchAssistant(bot, { battery: Math.min(100, bot.battery + 9) });
         }
         break;
       case 'idle':
         if (chance(0.004)) {
-          patchForklift(fl, { status: 'fault' });
-        } else if (fl.battery < 20) {
-          patchForklift(fl, { status: 'charging', shipmentId: null });
+          patchAssistant(bot, { status: 'fault' });
+        } else if (bot.battery < 20) {
+          patchAssistant(bot, { status: 'charging', sessionId: null });
         } else if (chance(0.45)) {
-          const work = atDockBySite.get(fl.siteId);
+          const work = activeByCampus.get(bot.campusId);
           const task = work && chance(0.7) ? pick(work) : null;
-          patchForklift(fl, {
+          patchAssistant(bot, {
             status: 'moving',
-            target: task ? dockApron(task, docks) : randomPickPoint(rand),
-            shipmentId: task?.id ?? null,
-            battery: Math.max(0, fl.battery - drain),
+            target: task ? roomEntrance(task, rooms) : randomPickPoint(rand),
+            sessionId: task?.id ?? null,
+            battery: Math.max(0, bot.battery - drain),
           });
         }
         break;
       case 'moving': {
-        const position = stepTowards(fl.position, fl.target, 6);
-        const arrived = dist(position, fl.target) < 0.1;
-        patchForklift(fl, {
+        const position = stepTowards(bot.position, bot.target, 6);
+        const arrived = dist(position, bot.target) < 0.1;
+        patchAssistant(bot, {
           position,
-          status: arrived ? 'lifting' : 'moving',
-          battery: Math.max(0, fl.battery - drain),
+          status: arrived ? 'assisting' : 'moving',
+          battery: Math.max(0, bot.battery - drain),
         });
         break;
       }
-      case 'lifting':
+      case 'assisting':
         if (chance(0.5)) {
-          patchForklift(fl, {
-            status: fl.battery < 20 ? 'charging' : 'idle',
-            shipmentId: null,
-            battery: Math.max(0, fl.battery - drain),
+          patchAssistant(bot, {
+            status: bot.battery < 20 ? 'charging' : 'idle',
+            sessionId: null,
+            battery: Math.max(0, bot.battery - drain),
           });
         }
         break;
     }
   }
 
-  return { ...world, docks, trucks, shipments, inventory, forklifts };
+  return { ...world, rooms, cohorts, sessions, materials, assistants };
 }
 
 function dist(a: Vec2, b: Vec2) {
@@ -205,7 +204,7 @@ function dist(a: Vec2, b: Vec2) {
 
 /**
  * Move up to `maxStep` metres towards `target`, following the aisles:
- * forklifts only change rows on a cross aisle or inside the open staging zone.
+ * robots only change rows on a cross aisle or inside the open prep zone.
  */
 export function stepTowards(from: Vec2, target: Vec2, maxStep: number): Vec2 {
   // One straight segment per tick, so the scene animates along the aisles.
@@ -225,19 +224,19 @@ function nextWaypoint(pos: Vec2, target: Vec2): Vec2 {
   return { x: nearest, z: pos.z };
 }
 
-function dockApron(shipment: Shipment, docks: Record<string, Dock>): Vec2 {
-  const dock = shipment.dockId ? docks[shipment.dockId] : null;
-  return { x: dock ? dockX(dock.index) : 20, z: DOCK_WALL_Z - 3 };
+/** Just inside the entrance of the room a session runs in. */
+function roomEntrance(session: Session, rooms: Record<string, Room>): Vec2 {
+  const room = session.roomId ? rooms[session.roomId] : null;
+  return { x: room ? roomX(room.index) : 20, z: FRONT_Z - 3 };
 }
 
 function randomPickPoint(rand: () => number): Vec2 {
   if (rand() < 0.35) {
     return {
-      x: STAGING.minX + 2 + rand() * (STAGING.maxX - STAGING.minX - 4),
-      z: STAGING.minZ + 4 + rand() * (STAGING.maxZ - STAGING.minZ - 6),
+      x: PREP_ZONE.minX + 2 + rand() * (PREP_ZONE.maxX - PREP_ZONE.minX - 4),
+      z: PREP_ZONE.minZ + 4 + rand() * (PREP_ZONE.maxZ - PREP_ZONE.minZ - 6),
     };
   }
   const bay = 1 + Math.floor(rand() * BAYS);
   return { x: rackX(bay), z: TRAVEL_AISLE_Z[Math.floor(rand() * TRAVEL_AISLE_Z.length)] };
 }
-

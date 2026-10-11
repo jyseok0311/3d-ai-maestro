@@ -2,12 +2,15 @@ import * as THREE from 'three';
 
 /**
  * Geometries shared by every instance of a model. Creating them once keeps
- * GPU memory flat no matter how many trucks, forklifts or docks exist.
+ * GPU memory flat no matter how many cohorts, robots or rooms exist.
  */
 export const GEO = {
   box: new THREE.BoxGeometry(1, 1, 1),
   wheel: new THREE.CylinderGeometry(0.5, 0.5, 0.4, 12).rotateZ(Math.PI / 2),
   lamp: new THREE.SphereGeometry(0.22, 10, 8),
+  body: new THREE.CapsuleGeometry(0.38, 0.8, 3, 8).translate(0, 0.8, 0),
+  head: new THREE.SphereGeometry(0.31, 10, 8).translate(0, 1.92, 0),
+  marker: new THREE.OctahedronGeometry(0.5, 0),
 };
 
 const std = (color: string, extra: THREE.MeshStandardMaterialParameters = {}) =>
@@ -15,21 +18,22 @@ const std = (color: string, extra: THREE.MeshStandardMaterialParameters = {}) =>
 
 export const MAT = {
   tire: std('#15171a', { roughness: 1 }),
-  trailer: std('#d6d3cd'),
-  chassis: std('#2a2d33'),
-  forkliftBody: std('#f5a524'),
-  forkliftDark: std('#24272c', { metalness: 0.4 }),
-  forks: std('#9ca3af', { metalness: 0.7, roughness: 0.4 }),
+  robotShell: std('#e5e7eb', { roughness: 0.5 }),
+  robotDark: std('#24272c', { metalness: 0.4 }),
+  tray: std('#9ca3af', { metalness: 0.6, roughness: 0.4 }),
+  skin: std('#f1c9a5', { roughness: 0.9 }),
   slab: std('#262a31'),
   lot: std('#191c21', { roughness: 1 }),
+  podFloor: std('#2b3340'),
   wall: std('#3a3f47'),
-  wallTrim: std('#f5a524'),
+  trim: std('#4f9dff'),
   doorFrame: std('#4b515b'),
   door: std('#8b929c', { metalness: 0.3 }),
-  leveler: std('#30343b'),
-  rackFrame: std('#f5a524', { metalness: 0.3, roughness: 0.6 }),
+  desk: std('#c8b08a'),
+  glass: new THREE.MeshStandardMaterial({ color: '#cfe6ff', emissive: '#4f9dff', emissiveIntensity: 0.25, transparent: true, opacity: 0.12, roughness: 0.1, depthWrite: false }),
+  rackFrame: std('#4f9dff', { metalness: 0.3, roughness: 0.6 }),
   rackShelf: std('#56606c', { metalness: 0.4 }),
-  roadLine: new THREE.MeshBasicMaterial({ color: '#e8c06a' }),
+  lineMark: new THREE.MeshBasicMaterial({ color: '#8fbfff' }),
   charger: std('#1f2937'),
 };
 
@@ -80,13 +84,13 @@ export function labelTexture(code: string, name: string, active: boolean): THREE
   canvas.height = height;
   const ctx = canvas.getContext('2d')!;
   ctx.fillStyle = 'rgba(12,14,17,0.88)';
-  ctx.strokeStyle = active ? '#f5a524' : '#3a3f47';
+  ctx.strokeStyle = active ? '#4f9dff' : '#3a3f47';
   ctx.lineWidth = 3 * scale;
   ctx.beginPath();
   ctx.roundRect(2 * scale, 2 * scale, width - 4 * scale, height - 4 * scale, 8 * scale);
   ctx.fill();
   ctx.stroke();
-  ctx.fillStyle = active ? '#f5a524' : '#8b94a1';
+  ctx.fillStyle = active ? '#4f9dff' : '#8b94a1';
   ctx.beginPath();
   ctx.roundRect(12 * scale, 12 * scale, codeW, height - 24 * scale, 4 * scale);
   ctx.fill();

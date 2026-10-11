@@ -1,134 +1,143 @@
 /**
- * WareTrack data model.
+ * AI Maestro training-operations data model.
  *
- * Site 1─N Dock, Truck, Forklift, InventoryItem, Shipment
- * Truck  0..1 Dock      (truck.dockId  <-> dock.truckId)
- * Truck  0..1 Shipment  (truck.shipmentId <-> shipment.truckId)
- * Shipment N─N InventoryItem via ShipmentLine
- * Forklift 0..1 Shipment (the shipment it is currently handling)
+ * Campus 1─N Room, Cohort, Assistant, Material, Session
+ * Cohort    0..1 Room     (cohort.roomId    <-> room.cohortId)
+ * Cohort    0..1 Session  (cohort.sessionId <-> session.cohortId)
+ * Session   N─N Material  via SessionLine (materials handed out)
+ * Assistant 0..1 Session  (the session it is currently supporting)
  */
 
 export type ID = string;
 
-/** Site-local ground coordinates in metres (x → east, z → south). */
+/** Campus-local ground coordinates in metres (x → east, z → south). */
 export interface Vec2 {
   x: number;
   z: number;
 }
 
-export interface Site {
+export interface Campus {
   id: ID;
   code: string;
   name: string;
-  city: string;
-  /** World-space centre of the site. All other positions are site-local. */
+  address: string;
+  /** World-space centre of the campus. All other positions are campus-local. */
   origin: Vec2;
 }
 
-export type DockStatus = 'free' | 'occupied' | 'maintenance';
+export type RoomStatus = 'free' | 'in_session' | 'maintenance';
 
-export interface Dock {
+export interface Room {
   id: ID;
-  siteId: ID;
-  /** 0-based slot along the dock wall. */
+  campusId: ID;
+  /** 0-based slot along the training-centre front. */
   index: number;
   label: string;
-  status: DockStatus;
-  truckId: ID | null;
+  seats: number;
+  status: RoomStatus;
+  cohortId: ID | null;
   lastUpdate: number;
 }
 
-export type TruckStatus =
-  | 'idle'
-  | 'en_route'
-  | 'queued'
-  | 'docked'
-  | 'loading'
-  | 'unloading'
-  | 'departing';
+export type Track = 'basic' | 'prompt' | 'automation' | 'data';
 
-export interface Truck {
-  id: ID;
-  plate: string;
-  carrier: string;
-  driver: string;
-  siteId: ID;
-  status: TruckStatus;
-  dockId: ID | null;
-  shipmentId: ID | null;
-  capacityKg: number;
-  lastUpdate: number;
-}
+export type CohortStatus =
+  | 'break'
+  | 'moving'
+  | 'waiting'
+  | 'checked_in'
+  | 'lecture'
+  | 'practice'
+  | 'leaving';
 
-export type ForkliftStatus = 'idle' | 'moving' | 'lifting' | 'charging' | 'fault';
-
-export interface Forklift {
+/** A training class of staff learners that moves around campus as a group. */
+export interface Cohort {
   id: ID;
   name: string;
-  operator: string;
-  siteId: ID;
-  status: ForkliftStatus;
+  track: Track;
+  instructor: string;
+  /** Home department of most learners in the class. */
+  department: string;
+  learners: number;
+  campusId: ID;
+  status: CohortStatus;
+  roomId: ID | null;
+  sessionId: ID | null;
+  lastUpdate: number;
+}
+
+export type AssistantStatus = 'idle' | 'moving' | 'assisting' | 'charging' | 'fault';
+
+/** Teaching-assistant robot that ferries devices and kits to classrooms. */
+export interface Assistant {
+  id: ID;
+  name: string;
+  /** Human TA responsible for the robot. */
+  supervisor: string;
+  campusId: ID;
+  status: AssistantStatus;
   /** 0–100 %. */
   battery: number;
   position: Vec2;
   target: Vec2;
-  shipmentId: ID | null;
+  sessionId: ID | null;
   lastUpdate: number;
 }
 
-export type ItemCategory = 'electronics' | 'food' | 'apparel' | 'auto_parts' | 'chemicals' | 'furniture';
+export type MaterialCategory = 'device' | 'kit' | 'textbook' | 'av' | 'consumable';
 
 export interface StorageLocation {
-  /** Rack row, 'A'–'F'. */
+  /** Cabinet row, 'A'–'F'. */
   aisle: string;
-  /** Rack column, 1–10. */
+  /** Cabinet column, 1–10. */
   bay: number;
   /** Shelf level, 1–3. */
   level: number;
 }
 
-export interface InventoryItem {
+export interface Material {
   id: ID;
-  siteId: ID;
+  campusId: ID;
   sku: string;
   name: string;
-  category: ItemCategory;
+  category: MaterialCategory;
   quantity: number;
   reorderPoint: number;
   location: StorageLocation;
 }
 
-export type ShipmentDirection = 'inbound' | 'outbound';
+export type SessionKind = 'lecture' | 'practice';
 
-export type ShipmentStatus = 'scheduled' | 'in_transit' | 'delayed' | 'at_dock' | 'completed';
+export type SessionStatus = 'scheduled' | 'moving' | 'late' | 'in_progress' | 'completed';
 
-export interface ShipmentLine {
-  itemId: ID;
+export interface SessionLine {
+  materialId: ID;
   quantity: number;
 }
 
-export interface Shipment {
+export interface Session {
   id: ID;
   reference: string;
-  siteId: ID;
-  direction: ShipmentDirection;
-  status: ShipmentStatus;
-  truckId: ID | null;
-  dockId: ID | null;
-  lines: ShipmentLine[];
-  /** Promised arrival time at the dock (epoch ms). */
-  eta: number;
-  /** Actual arrival time at the dock (epoch ms), once it happened. */
-  arrivedAt: number | null;
+  title: string;
+  campusId: ID;
+  kind: SessionKind;
+  status: SessionStatus;
+  cohortId: ID | null;
+  roomId: ID | null;
+  lines: SessionLine[];
+  /** Scheduled start (epoch ms): the class should be checked in by then. */
+  startAt: number;
+  /** Actual check-in time (epoch ms), once it happened. */
+  checkedInAt: number | null;
   lastUpdate: number;
 }
 
 /** Normalised world state: every collection is keyed by id. */
 export interface WorldData {
-  sites: Record<ID, Site>;
-  docks: Record<ID, Dock>;
-  trucks: Record<ID, Truck>;
-  forklifts: Record<ID, Forklift>;
-  inventory: Record<ID, InventoryItem>;
-  shipments: Record<ID, Shipment>;
+  campuses: Record<ID, Campus>;
+  rooms: Record<ID, Room>;
+  cohorts: Record<ID, Cohort>;
+  assistants: Record<ID, Assistant>;
+  materials: Record<ID, Material>;
+  sessions: Record<ID, Session>;
 }

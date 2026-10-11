@@ -1,14 +1,14 @@
 import { useEffect } from 'react';
-import { SIM_INTERVAL_MS, useWarehouseStore } from './store/useWarehouseStore';
-import { WarehouseScene } from './scene/WarehouseScene';
+import { SIM_INTERVAL_MS, useMaestroStore } from './store/useMaestroStore';
+import { MaestroScene } from './scene/MaestroScene';
 import { TopBar } from './ui/TopBar';
 import { FilterPanel } from './ui/FilterPanel';
 import { InspectorPanel } from './ui/InspectorPanel';
 import { Legend } from './ui/Legend';
 
 export function App() {
-  const running = useWarehouseStore((s) => s.running);
-  const tick = useWarehouseStore((s) => s.tick);
+  const running = useMaestroStore((s) => s.running);
+  const tick = useMaestroStore((s) => s.tick);
 
   // Live feed: advance the simulation every 2 seconds while running.
   useEffect(() => {
@@ -19,7 +19,7 @@ export function App() {
 
   return (
     <div className="app">
-      <WarehouseScene />
+      <MaestroScene />
       <TopBar />
       <FilterPanel />
       <InspectorPanel />

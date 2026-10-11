@@ -3,13 +3,13 @@ import type { ThreeEvent } from '@react-three/fiber';
 import { Edges, useCursor } from '@react-three/drei';
 import * as THREE from 'three';
 import { AISLES, BAYS, LEVELS, RACK_ROW_Z, RACK_SIZE, rackX } from '../data/layout';
-import type { Site } from '../data/types';
+import type { Campus } from '../data/types';
 import { GEO, MAT } from './assets';
-import { AMBER } from '../theme';
+import { ACCENT } from '../theme';
 
-interface RackInfo {
+interface CabinetInfo {
   key: string;
-  siteId: string;
+  campusId: string;
   aisle: string;
   bay: number;
   x: number;
@@ -17,18 +17,25 @@ interface RackInfo {
 }
 
 interface Props {
-  sites: Site[];
-  /** Fill per slot, keyed `${siteId}:${aisle}:${bay}:${level}`; 0–1, negative = low stock. */
-  slotFill: Map<string, number>;
+  campuses: Campus[];
+  /** Tracked stock per slot, keyed `${campusId}:${aisle}:${bay}:${level}`. */
+  slots: Map<string, SlotFill>;
   selectedKey: string | null;
   onSelect: (key: string) => void;
 }
 
 const SHELF_Y = [0.2, 1.4, 2.6];
 const BOX = { w: 1.05, h: 0.85, d: 1.1 };
-const CARGO = new THREE.Color('#b08a5a');
-const CARGO_LOW = new THREE.Color('#ef4444');
-const CARGO_TINT = new THREE.Color('#d9b37c');
+export interface SlotFill {
+  /** 0–1 share of a comfortable stock level. */
+  fill: number;
+  low: boolean;
+  color: string;
+}
+
+const UNTRACKED = new THREE.Color('#7c8796');
+const LOW = new THREE.Color('#ef4444');
+const SHADE = new THREE.Color('#0c0e11');
 
 /** Cheap, stable pseudo-random value per string. */
 function hash01(s: string) {
@@ -38,25 +45,25 @@ function hash01(s: string) {
 }
 
 /**
- * All shelving of all sites in four instanced draw calls: uprights, shelves,
- * cargo boxes and an invisible hit-box layer that receives the clicks.
+ * All storage cabinets of all campuses in four instanced draw calls: frames,
+ * shelves, material boxes and an invisible hit-box layer that receives the clicks.
  */
-export const Racks = memo(function Racks({ sites, slotFill, selectedKey, onSelect }: Props) {
-  const racks = useMemo<RackInfo[]>(
+export const Cabinets = memo(function Cabinets({ campuses, slots, selectedKey, onSelect }: Props) {
+  const racks = useMemo<CabinetInfo[]>(
     () =>
-      sites.flatMap((site) =>
+      campuses.flatMap((campus) =>
         AISLES.flatMap((aisle, ai) =>
           Array.from({ length: BAYS }, (_, b) => ({
-            key: `${site.id}:${aisle}:${b + 1}`,
-            siteId: site.id,
+            key: `${campus.id}:${aisle}:${b + 1}`,
+            campusId: campus.id,
             aisle,
             bay: b + 1,
-            x: site.origin.x + rackX(b + 1),
-            z: site.origin.z + RACK_ROW_Z[ai],
+            x: campus.origin.x + rackX(b + 1),
+            z: campus.origin.z + RACK_ROW_Z[ai],
           })),
         ),
       ),
-    [sites],
+    [campuses],
   );
 
   const uprights = useRef<THREE.InstancedMesh>(null);
@@ -95,7 +102,7 @@ export const Racks = memo(function Racks({ sites, slotFill, selectedKey, onSelec
     }
   }, [racks]);
 
-  // Cargo boxes reflect live inventory levels.
+  // Material boxes reflect live stock levels.
   useLayoutEffect(() => {
     const mesh = cargo.current!;
     const m = new THREE.Matrix4();
@@ -107,17 +114,19 @@ export const Racks = memo(function Racks({ sites, slotFill, selectedKey, onSelec
     for (const r of racks) {
       for (let l = 0; l < LEVELS; l++) {
         const slotKey = `${r.key}:${l + 1}`;
-        const fill = slotFill.get(slotKey);
-        // Slots without a tracked SKU get a stable decorative fill.
-        const amount = fill === undefined ? (hash01(slotKey) > 0.35 ? hash01(slotKey + 'n') : 0) : Math.abs(fill);
+        const slot = slots.get(slotKey);
+        // Slots without a tracked material get a stable decorative fill.
+        const amount = slot === undefined ? (hash01(slotKey) > 0.35 ? hash01(slotKey + 'n') : 0) : slot.fill;
         const boxes = amount <= 0 ? 0 : amount < 0.5 ? 1 : 2;
         for (let k = 0; k < 2; k++) {
           const visible = k < boxes;
           v.set(r.x + (k ? 0.68 : -0.68), SHELF_Y[l] + 0.04 + BOX.h / 2, r.z);
           s.set(visible ? BOX.w : 0, visible ? BOX.h : 0, visible ? BOX.d : 0);
           mesh.setMatrixAt(i, m.compose(v, q, s));
-          if (fill !== undefined && fill < 0) c.copy(CARGO_LOW);
-          else c.copy(CARGO).lerp(CARGO_TINT, hash01(slotKey + k));
+          if (!slot) c.copy(UNTRACKED);
+          else if (slot.low) c.copy(LOW);
+          else c.set(slot.color);
+          c.lerp(SHADE, hash01(slotKey + k) * 0.25);
           mesh.setColorAt(i, c);
           i++;
         }
@@ -126,7 +135,7 @@ export const Racks = memo(function Racks({ sites, slotFill, selectedKey, onSelec
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     mesh.computeBoundingSphere();
-  }, [racks, slotFill]);
+  }, [racks, slots]);
 
   const selected = selectedKey ? racks.find((r) => r.key === selectedKey) : undefined;
 
@@ -154,8 +163,8 @@ export const Racks = memo(function Racks({ sites, slotFill, selectedKey, onSelec
       {selected && (
         <mesh position={[selected.x, RACK_SIZE.h / 2, selected.z]} scale={[RACK_SIZE.w + 0.3, RACK_SIZE.h + 0.3, RACK_SIZE.d + 0.3]} raycast={() => null}>
           <boxGeometry />
-          <meshBasicMaterial color={AMBER} transparent opacity={0.12} depthWrite={false} />
-          <Edges color={AMBER} lineWidth={2} />
+          <meshBasicMaterial color={ACCENT} transparent opacity={0.12} depthWrite={false} />
+          <Edges color={ACCENT} lineWidth={2} />
         </mesh>
       )}
     </group>

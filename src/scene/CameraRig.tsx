@@ -16,7 +16,7 @@ interface Props {
   bounds: Bounds;
 }
 
-/** Isometric-style viewing direction: ~32° yaw, ~40° elevation, docks facing the camera. */
+/** Isometric-style viewing direction: ~32° yaw, ~40° elevation, classroom pods facing the camera. */
 const VIEW_DIR = new THREE.Vector3(0.62, 1.15, 1).normalize();
 const MIN_DIST = 30;
 const MAX_DIST = 320;
