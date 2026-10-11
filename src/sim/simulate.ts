@@ -1,242 +1,241 @@
-import {
-  BAYS,
-  CHARGER,
-  CROSS_AISLE_X,
-  FRONT_Z,
-  PREP_ZONE,
-  TRAVEL_AISLE_Z,
-  rackX,
-  roomX,
-} from '../data/layout';
-import { SESSION_TITLES } from '../data/seed';
-import type { Assistant, Cohort, Room, Session, Vec2, WorldData } from '../data/types';
+import { TEAM_NAMES } from '../data/people';
+import { ASSIGNMENTS_TOTAL, SESSIONS_TO_FINISH, newParticipant, newTeam, stageOf } from '../data/seed';
+import type { ActivityEvent, Award, Participant, ParticipantStatus, StageKey, Team, WorldData } from '../data/types';
 
-/** Completed sessions kept for the rolling on-time KPI. */
-const MAX_COMPLETED = 40;
+const MAX_PARTICIPANTS = 60;
+const MAX_EVENTS = 40;
+const TEAM_SIZE = 4;
+const SELECTION_CUTOFF = { screening: 68, final: 75 };
 
 /**
  * One step of the live simulation. Pure: returns a new WorldData and only
- * replaces the records that actually changed, so React components that
- * subscribe to a single cohort or robot re-render only when it changes.
+ * replaces the records that actually changed, so the scene and panels update
+ * only for people and teams whose state moved.
  */
 export function simulateTick(world: WorldData, now: number, rand: () => number): WorldData {
-  const rooms = { ...world.rooms };
-  const cohorts = { ...world.cohorts };
-  const sessions = { ...world.sessions };
-  const materials = { ...world.materials };
-  const assistants = { ...world.assistants };
+  const participants = { ...world.participants };
+  const teams = { ...world.teams };
+  const stats = { ...world.stats };
+  const newEvents: ActivityEvent[] = [];
+  let seq = world.seq;
+  const nextId = (prefix: string) => `${prefix}-${String(++seq).padStart(3, '0')}`;
 
   const chance = (p: number) => rand() < p;
-  const pick = <T,>(arr: readonly T[]) => arr[Math.floor(rand() * arr.length)];
-  const patchCohort = (c: Cohort, p: Partial<Cohort>) => (cohorts[c.id] = { ...c, ...p, lastUpdate: now });
-  const patchRoom = (r: Room, p: Partial<Room>) => (rooms[r.id] = { ...r, ...p, lastUpdate: now });
-  const patchSession = (s: Session, p: Partial<Session>) => (sessions[s.id] = { ...s, ...p, lastUpdate: now });
-  const patchAssistant = (a: Assistant, p: Partial<Assistant>) => (assistants[a.id] = { ...a, ...p, lastUpdate: now });
+  const log = (stage: StageKey, text: string, ref: ActivityEvent['ref'] = null) =>
+    newEvents.push({ id: nextId('ev'), ts: now, stage, text, ref });
+  const patch = (p: Participant, change: Partial<Participant>) => {
+    const status = change.status ?? p.status;
+    return (participants[p.id] = { ...p, ...change, stage: stageOf(status), lastUpdate: now });
+  };
+  const patchTeam = (t: Team, change: Partial<Team>) => (teams[t.id] = { ...t, ...change, lastUpdate: now });
+  const move = (p: Participant, status: ParticipantStatus, facilityId: string | null = null, seat: number | null = null, extra: Partial<Participant> = {}) =>
+    patch(p, { status, facilityId, seat, ...extra });
 
-  let sessionSeq = Math.max(0, ...Object.keys(sessions).map((id) => Number(id.split('-')[1]) || 0));
+  /** Lowest free seat in a facility, or null when it is full. */
+  const freeSeat = (facilityId: string): number | null => {
+    const f = world.facilities[facilityId];
+    const taken = new Set(
+      Object.values(participants)
+        .filter((p) => p.facilityId === facilityId)
+        .map((p) => p.seat),
+    );
+    for (let s = 0; s < f.capacity; s++) if (!taken.has(s)) return s;
+    return null;
+  };
+  const firstFree = (kind: string): { facilityId: string; seat: number } | null => {
+    for (const f of Object.values(world.facilities)) {
+      if (f.kind !== kind) continue;
+      const seat = freeSeat(f.id);
+      if (seat !== null) return { facilityId: f.id, seat };
+    }
+    return null;
+  };
 
-  // ── Cohorts: break → moving → waiting → checked_in → lecture/practice → leaving → break
-  for (const id of Object.keys(cohorts)) {
-    const cohort = cohorts[id];
-    const session = cohort.sessionId ? sessions[cohort.sessionId] : null;
+  // ── Participants ──────────────────────────────────────────────────────
+  // Oldest updates first, so queues are served in arrival order.
+  const order = Object.values(participants).sort((a, b) => a.lastUpdate - b.lastUpdate);
+  for (const snapshot of order) {
+    const p = participants[snapshot.id];
+    if (!p) continue;
 
-    switch (cohort.status) {
-      case 'break': {
-        if (!chance(0.12)) break;
-        let next = Object.values(sessions).find(
-          (s) => s.campusId === cohort.campusId && !s.cohortId && !s.checkedInAt && (s.status === 'scheduled' || s.status === 'late'),
-        );
-        if (!next) {
-          sessionSeq += 1;
-          const campusMaterials = Object.values(materials).filter((m) => m.campusId === cohort.campusId);
-          next = {
-            id: `ses-${String(sessionSeq).padStart(3, '0')}`,
-            reference: `S-2610-${String(sessionSeq).padStart(4, '0')}`,
-            title: pick(SESSION_TITLES[cohort.track]),
-            campusId: cohort.campusId,
-            kind: chance(0.5) ? 'lecture' : 'practice',
-            status: 'scheduled',
-            cohortId: null,
-            roomId: null,
-            lines: [{ materialId: pick(campusMaterials).id, quantity: 5 + Math.floor(rand() * 3) * 5 }],
-            // Tight schedule (sim time is compressed), so some classes arrive late.
-            startAt: now + (8 + Math.floor(rand() * 24)) * 1000,
-            checkedInAt: null,
-            lastUpdate: now,
-          };
+    switch (p.status) {
+      case 'applied': {
+        const booth = firstFree('booth');
+        if (booth && chance(0.5)) move(p, 'screening', booth.facilityId, booth.seat);
+        break;
+      }
+      case 'screening': {
+        if (!chance(0.3)) break;
+        const score = p.score ?? 55 + Math.round(rand() * 45);
+        if (score < SELECTION_CUTOFF.screening) {
+          stats.notSelected += 1;
+          move(p, 'not_selected', null, null, { score });
+          log('selection', `${p.name} 서류심사 미통과`, { kind: 'participant', id: p.id });
+          break;
         }
-        patchSession(next, { status: next.startAt < now ? 'late' : 'moving', cohortId: cohort.id });
-        patchCohort(cohort, { status: 'moving', sessionId: next.id });
+        const room = firstFree('interview');
+        // Hold the booth until an interview room opens up.
+        if (room) move(p, 'interview', room.facilityId, room.seat, { score });
+        else patch(p, { score });
         break;
       }
-      case 'moving':
-        if (chance(0.25)) patchCohort(cohort, { status: 'waiting' });
-        break;
-      case 'waiting': {
-        const room = Object.values(rooms).find(
-          (r) => r.campusId === cohort.campusId && r.status === 'free' && !r.cohortId,
-        );
-        if (!room || !chance(0.6)) break;
-        patchRoom(room, { status: 'in_session', cohortId: cohort.id });
-        patchCohort(cohort, { status: 'checked_in', roomId: room.id });
-        if (session) patchSession(session, { status: 'in_progress', roomId: room.id, checkedInAt: now });
-        break;
-      }
-      case 'checked_in':
-        if (chance(0.45)) patchCohort(cohort, { status: session?.kind === 'practice' ? 'practice' : 'lecture' });
-        break;
-      case 'lecture':
-      case 'practice': {
-        if (!chance(0.22)) break;
-        if (session) {
-          // Materials handed out during the class leave the cabinets.
-          for (const line of session.lines) {
-            const m = materials[line.materialId];
-            if (m) materials[m.id] = { ...m, quantity: Math.max(0, m.quantity - line.quantity) };
-          }
-          patchSession(session, { status: 'completed', cohortId: null });
-        }
-        const room = cohort.roomId ? rooms[cohort.roomId] : null;
-        if (room) patchRoom(room, { status: 'free', cohortId: null });
-        patchCohort(cohort, { status: 'leaving', roomId: null, sessionId: null });
-        break;
-      }
-      case 'leaving':
-        if (chance(0.4)) patchCohort(cohort, { status: 'break' });
-        break;
-    }
-  }
-
-  // ── Sessions: flag classes that missed their start time.
-  for (const s of Object.values(sessions)) {
-    if ((s.status === 'moving' || s.status === 'scheduled') && s.startAt < now) {
-      patchSession(s, { status: 'late' });
-    }
-  }
-
-  // ── Keep a rolling history: drop the oldest completed sessions.
-  const completed = Object.values(sessions)
-    .filter((s) => s.status === 'completed')
-    .sort((a, b) => b.lastUpdate - a.lastUpdate);
-  for (const s of completed.slice(MAX_COMPLETED)) delete sessions[s.id];
-
-  // ── Rooms: occasional equipment checks.
-  for (const room of Object.values(rooms)) {
-    if (room.status === 'free' && chance(0.004)) patchRoom(room, { status: 'maintenance' });
-    else if (room.status === 'maintenance' && chance(0.08)) patchRoom(room, { status: 'free' });
-  }
-
-  // ── Restocking: low materials get replenished from time to time.
-  for (const m of Object.values(materials)) {
-    if (m.quantity <= m.reorderPoint && chance(0.05)) {
-      materials[m.id] = { ...m, quantity: m.quantity + m.reorderPoint * 3 };
-    }
-  }
-
-  // ── Assistant robots.
-  const activeByCampus = new Map<string, Session[]>();
-  for (const s of Object.values(sessions)) {
-    if (s.status !== 'in_progress') continue;
-    activeByCampus.set(s.campusId, [...(activeByCampus.get(s.campusId) ?? []), s]);
-  }
-
-  for (const id of Object.keys(assistants)) {
-    const bot = assistants[id];
-    const drain = bot.status === 'moving' ? 1.6 : bot.status === 'assisting' ? 2.2 : 0.2;
-
-    switch (bot.status) {
-      case 'fault':
-        if (chance(0.15)) patchAssistant(bot, { status: 'idle' });
-        break;
-      case 'charging':
-        if (dist(bot.position, CHARGER) > 0.1) {
-          patchAssistant(bot, { position: stepTowards(bot.position, CHARGER, 6), target: { ...CHARGER } });
-        } else if (bot.battery >= 95) {
-          patchAssistant(bot, { status: 'idle', battery: 100 });
+      case 'interview': {
+        if (!chance(0.3)) break;
+        const score = Math.min(100, Math.round((p.score ?? 70) * 0.6 + (60 + rand() * 40) * 0.4));
+        if (score >= SELECTION_CUTOFF.final) {
+          stats.selected += 1;
+          move(p, 'selected', null, null, { score });
+          log('selection', `${p.name}(${p.department}) 최종 선발 · ${score}점`, { kind: 'participant', id: p.id });
         } else {
-          patchAssistant(bot, { battery: Math.min(100, bot.battery + 9) });
+          stats.notSelected += 1;
+          move(p, 'not_selected', null, null, { score });
+          log('selection', `${p.name} 면접 후 미선발`, { kind: 'participant', id: p.id });
         }
-        break;
-      case 'idle':
-        if (chance(0.004)) {
-          patchAssistant(bot, { status: 'fault' });
-        } else if (bot.battery < 20) {
-          patchAssistant(bot, { status: 'charging', sessionId: null });
-        } else if (chance(0.45)) {
-          const work = activeByCampus.get(bot.campusId);
-          const task = work && chance(0.7) ? pick(work) : null;
-          patchAssistant(bot, {
-            status: 'moving',
-            target: task ? roomEntrance(task, rooms) : randomPickPoint(rand),
-            sessionId: task?.id ?? null,
-            battery: Math.max(0, bot.battery - drain),
-          });
-        }
-        break;
-      case 'moving': {
-        const position = stepTowards(bot.position, bot.target, 6);
-        const arrived = dist(position, bot.target) < 0.1;
-        patchAssistant(bot, {
-          position,
-          status: arrived ? 'assisting' : 'moving',
-          battery: Math.max(0, bot.battery - drain),
-        });
         break;
       }
-      case 'assisting':
-        if (chance(0.5)) {
-          patchAssistant(bot, {
-            status: bot.battery < 20 ? 'charging' : 'idle',
-            sessionId: null,
-            battery: Math.max(0, bot.battery - drain),
-          });
+      case 'selected': {
+        const seat = firstFree('classroom');
+        if (seat && chance(0.5)) move(p, 'training', seat.facilityId, seat.seat);
+        break;
+      }
+      case 'training': {
+        let { sessionsHeld, sessionsAttended, assignmentsDone } = p;
+        if (chance(0.3)) {
+          sessionsHeld += 1;
+          // Each person has a stable attendance habit derived from their id.
+          const habit = 0.86 + (Number(p.id.split('-')[1]) % 7) * 0.02;
+          if (rand() < habit) sessionsAttended += 1;
         }
+        if (assignmentsDone < ASSIGNMENTS_TOTAL && chance(0.12)) assignmentsDone += 1;
+        const done = sessionsHeld >= SESSIONS_TO_FINISH && assignmentsDone >= ASSIGNMENTS_TOTAL;
+        if (done) {
+          move(p, 'study_wait', null, null, { sessionsHeld, sessionsAttended, assignmentsDone });
+          log('training', `${p.name} 교육 이수 · 출석 ${Math.round((sessionsAttended / sessionsHeld) * 100)}%`, {
+            kind: 'participant',
+            id: p.id,
+          });
+        } else if (sessionsHeld !== p.sessionsHeld || assignmentsDone !== p.assignmentsDone) {
+          patch(p, { sessionsHeld, sessionsAttended, assignmentsDone });
+        }
+        break;
+      }
+      case 'study_wait': {
+        if (!chance(0.5)) break;
+        // Join a forming team with room, or start a new one at a free table.
+        let team = Object.values(teams).find((t) => t.phase === 'forming' && t.memberIds.length < TEAM_SIZE);
+        if (!team) {
+          const table = Object.values(world.facilities).find(
+            (f) => f.kind === 'table' && !Object.values(teams).some((t) => t.tableId === f.id),
+          );
+          if (!table) break;
+          const used = new Set(Object.values(teams).map((t) => t.name));
+          const n = Math.max(0, TEAM_NAMES.findIndex((name) => !used.has(`${name}팀`)));
+          team = newTeam(nextId('team'), n, now);
+          team.tableId = table.id;
+          teams[team.id] = team;
+        }
+        const seat = freeSeat(team.tableId!);
+        if (seat === null) break;
+        const members = [...team.memberIds, p.id];
+        const full = members.length >= TEAM_SIZE;
+        patchTeam(team, { memberIds: members, phase: full ? 'studying' : 'forming' });
+        move(p, 'studying', team.tableId, seat, { teamId: team.id });
+        if (full) log('study', `${team.name} 결성 · 주제 「${team.topic}」`, { kind: 'team', id: team.id });
+        break;
+      }
+      case 'not_selected':
+      case 'graduated':
+        // Walk off the map, then leave the simulation.
+        if (chance(0.25)) delete participants[p.id];
         break;
     }
   }
 
-  return { ...world, rooms, cohorts, sessions, materials, assistants };
-}
-
-function dist(a: Vec2, b: Vec2) {
-  return Math.hypot(a.x - b.x, a.z - b.z);
-}
-
-/**
- * Move up to `maxStep` metres towards `target`, following the aisles:
- * robots only change rows on a cross aisle or inside the open prep zone.
- */
-export function stepTowards(from: Vec2, target: Vec2, maxStep: number): Vec2 {
-  // One straight segment per tick, so the scene animates along the aisles.
-  const wp = nextWaypoint(from, target);
-  const d = dist(from, wp);
-  if (d <= maxStep) return { ...wp };
-  const k = maxStep / d;
-  return { x: from.x + (wp.x - from.x) * k, z: from.z + (wp.z - from.z) * k };
-}
-
-function nextWaypoint(pos: Vec2, target: Vec2): Vec2 {
-  if (Math.abs(pos.z - target.z) < 1e-6) return target;
-  const inOpenArea = pos.x >= CROSS_AISLE_X[1] - 1e-6;
-  const onCross = CROSS_AISLE_X.some((x) => Math.abs(pos.x - x) < 1e-6);
-  if (inOpenArea || onCross) return { x: pos.x, z: target.z };
-  const nearest = CROSS_AISLE_X.reduce((a, b) => (Math.abs(b - pos.x) < Math.abs(a - pos.x) ? b : a));
-  return { x: nearest, z: pos.z };
-}
-
-/** Just inside the entrance of the room a session runs in. */
-function roomEntrance(session: Session, rooms: Record<string, Room>): Vec2 {
-  const room = session.roomId ? rooms[session.roomId] : null;
-  return { x: room ? roomX(room.index) : 20, z: FRONT_Z - 3 };
-}
-
-function randomPickPoint(rand: () => number): Vec2 {
-  if (rand() < 0.35) {
-    return {
-      x: PREP_ZONE.minX + 2 + rand() * (PREP_ZONE.maxX - PREP_ZONE.minX - 4),
-      z: PREP_ZONE.minZ + 4 + rand() * (PREP_ZONE.maxZ - PREP_ZONE.minZ - 6),
-    };
+  // ── Teams ─────────────────────────────────────────────────────────────
+  for (const team of Object.values(teams)) {
+    if (team.phase === 'studying') {
+      if (team.stalled) {
+        if (chance(0.15)) {
+          patchTeam(team, { stalled: false });
+          log('study', `${team.name} 멘토링으로 정체 해소 (${team.mentor})`, { kind: 'team', id: team.id });
+        }
+      } else if (chance(0.015)) {
+        patchTeam(team, { stalled: true });
+        log('study', `${team.name} 진행 정체 · 멘토 지원 필요`, { kind: 'team', id: team.id });
+      } else {
+        const progress = Math.min(100, team.progress + 1 + rand() * 3.5);
+        if (progress >= 100) {
+          patchTeam(team, { progress: 100, phase: 'ready', readyAt: now, tableId: null });
+          for (const id of team.memberIds) {
+            const m = participants[id];
+            const seat = freeSeat('audience-1');
+            if (m) move(m, 'audience', seat === null ? null : 'audience-1', seat);
+          }
+          log('showcase', `${team.name} 발표 준비 완료 · 성과공유회 대기`, { kind: 'team', id: team.id });
+        } else {
+          patchTeam(team, { progress });
+        }
+      }
+    }
   }
-  const bay = 1 + Math.floor(rand() * BAYS);
-  return { x: rackX(bay), z: TRAVEL_AISLE_Z[Math.floor(rand() * TRAVEL_AISLE_Z.length)] };
+
+  // One team presents at a time; the next ready team goes on stage after it.
+  const presenting = Object.values(teams).find((t) => t.phase === 'presenting');
+  if (presenting) {
+    if (chance(0.2)) {
+      const award = drawAward(rand);
+      stats.presentedTeams += 1;
+      stats.graduated += presenting.memberIds.length;
+      patchTeam(presenting, { phase: 'done', award });
+      for (const id of presenting.memberIds) {
+        const m = participants[id];
+        if (m) move(m, 'graduated');
+      }
+      log('showcase', `${presenting.name} 발표 완료 · ${award} · ${presenting.memberIds.length}명 수료`, {
+        kind: 'team',
+        id: presenting.id,
+      });
+    }
+  } else {
+    const next = Object.values(teams)
+      .filter((t) => t.phase === 'ready')
+      .sort((a, b) => (a.readyAt ?? 0) - (b.readyAt ?? 0))[0];
+    if (next && chance(0.5)) {
+      patchTeam(next, { phase: 'presenting' });
+      next.memberIds.forEach((id, i) => {
+        const m = participants[id];
+        if (m) move(m, 'presenting', 'stage-1', i);
+      });
+      log('showcase', `${next.name} 발표 시작 「${next.topic}」`, { kind: 'team', id: next.id });
+    }
+  }
+
+  // Finished teams disappear once all members have left the map.
+  for (const team of Object.values(teams)) {
+    if (team.phase === 'done' && team.memberIds.every((id) => !participants[id])) delete teams[team.id];
+  }
+
+  // ── New applicants ────────────────────────────────────────────────────
+  if (Object.keys(participants).length < MAX_PARTICIPANTS && chance(0.35)) {
+    stats.applied += 1;
+    // A new generation opens every 30 applications.
+    if (stats.applied % 30 === 0) {
+      stats.generation += 1;
+      log('selection', `${stats.generation}기 모집 시작`);
+    }
+    const p = newParticipant(rand, nextId('p'), stats.generation, 'applied', now);
+    participants[p.id] = p;
+    log('selection', `${p.name}(${p.department}) ${p.generation}기 지원`, { kind: 'participant', id: p.id });
+  }
+
+  const events = newEvents.length ? [...newEvents.reverse(), ...world.events].slice(0, MAX_EVENTS) : world.events;
+  return { ...world, participants, teams, stats, events, seq };
+}
+
+function drawAward(rand: () => number): Award {
+  const r = rand();
+  if (r < 0.1) return '대상';
+  if (r < 0.3) return '최우수상';
+  if (r < 0.6) return '우수상';
+  return '장려상';
 }

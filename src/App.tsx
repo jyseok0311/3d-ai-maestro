@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { SIM_INTERVAL_MS, useMaestroStore } from './store/useMaestroStore';
 import { MaestroScene } from './scene/MaestroScene';
 import { TopBar } from './ui/TopBar';
-import { FilterPanel } from './ui/FilterPanel';
+import { SidePanel } from './ui/SidePanel';
 import { InspectorPanel } from './ui/InspectorPanel';
 import { Legend } from './ui/Legend';
 
@@ -21,7 +21,7 @@ export function App() {
     <div className="app">
       <MaestroScene />
       <TopBar />
-      <FilterPanel />
+      <SidePanel />
       <InspectorPanel />
       <Legend />
     </div>

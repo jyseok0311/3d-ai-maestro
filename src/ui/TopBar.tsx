@@ -1,18 +1,22 @@
 import { useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
+import { STAGE_ORDER } from '../data/layout';
+import type { StageKey } from '../data/types';
 import { useMaestroStore } from '../store/useMaestroStore';
 import { computeKpis } from '../store/selectors';
+import { STAGE_COLOR } from '../theme';
 import { clock, pct } from './format';
 
 export function TopBar() {
-  const { campuses, campusId, setCampus, running, setRunning, now } = useMaestroStore(
+  const { stages, view, setView, running, setRunning, now, generation } = useMaestroStore(
     useShallow((s) => ({
-      campuses: s.campuses,
-      campusId: s.campusId,
-      setCampus: s.setCampus,
+      stages: s.stages,
+      view: s.view,
+      setView: s.setView,
       running: s.running,
       setRunning: s.setRunning,
       now: s.now,
+      generation: s.stats.generation,
     })),
   );
 
@@ -22,18 +26,25 @@ export function TopBar() {
         <div className="logo">◆</div>
         <div>
           <div className="brand-title">AI MAESTRO</div>
-          <div className="brand-sub">교직원 AI 교육 운영 관제</div>
+          <div className="brand-sub">교직원 AI 인재 양성 여정 · {generation}기 모집 중</div>
         </div>
       </div>
 
-      <nav className="site-tabs" aria-label="캠퍼스 선택">
-        <button className={campusId === 'all' ? 'active' : ''} onClick={() => setCampus('all')}>
-          전체
+      <nav className="site-tabs" aria-label="단계 선택">
+        <button className={view === 'all' ? 'active' : ''} onClick={() => setView('all')}>
+          <span className="code">ALL</span>
+          전체 여정
         </button>
-        {Object.values(campuses).map((c) => (
-          <button key={c.id} className={campusId === c.id ? 'active' : ''} onClick={() => setCampus(c.id)} title={c.address}>
-            <span className="code">{c.code}</span>
-            {c.name.replace(' AI교육관', '')}
+        {STAGE_ORDER.map((id) => (
+          <button
+            key={id}
+            className={view === id ? 'active' : ''}
+            onClick={() => setView(id)}
+            title={stages[id].subtitle}
+            style={{ ['--stage' as string]: STAGE_COLOR[id] }}
+          >
+            <span className="code">0{stages[id].order}</span>
+            {stages[id].name}
           </button>
         ))}
       </nav>
@@ -52,39 +63,64 @@ export function TopBar() {
 }
 
 function KpiCards() {
-  const { rooms, cohorts, materials, sessions, campusId } = useMaestroStore(
-    useShallow((s) => ({
-      rooms: s.rooms,
-      cohorts: s.cohorts,
-      materials: s.materials,
-      sessions: s.sessions,
-      campusId: s.campusId,
-    })),
+  const { participants, teams, stats, setView } = useMaestroStore(
+    useShallow((s) => ({ participants: s.participants, teams: s.teams, stats: s.stats, setView: s.setView })),
   );
-  const k = useMemo(
-    () => computeKpis({ rooms, cohorts, materials, sessions }, campusId),
-    [rooms, cohorts, materials, sessions, campusId],
-  );
-  const onTimeTone = k.onTimeRate === null ? '' : k.onTimeRate >= 0.9 ? 'good' : k.onTimeRate >= 0.75 ? 'warn' : 'bad';
+  const k = useMemo(() => computeKpis({ participants, teams, stats }), [participants, teams, stats]);
 
   return (
     <div className="kpis">
-      <Kpi label="정시 입실률" value={pct(k.onTimeRate)} sub={`${k.onTimeCount}/${k.checkedInCount}회 · 지연 ${k.late}`} tone={onTimeTone} />
       <Kpi
-        label="교육실 사용"
-        value={`${k.roomsInUse}/${k.roomsTotal}`}
-        sub="교육 중 / 전체"
-        meter={k.roomsTotal ? k.roomsInUse / k.roomsTotal : 0}
+        stage="selection"
+        label="선발률"
+        value={pct(k.selectionRate)}
+        sub={`지원 ${k.applied} · 선발 ${k.selected} · 심사 중 ${k.inSelection}`}
+        onClick={setView}
       />
-      <Kpi label="진행 중 차수" value={`${k.activeCohorts}`} sub={`전체 ${k.cohortsTotal}개 반 중`} />
-      <Kpi label="부족 교보재" value={`${k.lowStock}`} sub="재주문점 이하 품목" tone={k.lowStock > 0 ? 'bad' : 'good'} />
+      <Kpi
+        stage="training"
+        label="평균 출석률"
+        value={pct(k.attendance)}
+        sub={`수강 ${k.inTraining}명 · 과제 제출 ${pct(k.assignmentRate)}`}
+        tone={k.attendance !== null && k.attendance < 0.85 ? 'warn' : undefined}
+        onClick={setView}
+      />
+      <Kpi
+        stage="study"
+        label="스터디 평균 진행률"
+        value={pct(k.studyProgress)}
+        sub={`활동 ${k.studyTeams}팀 · 정체 ${k.stalledTeams}팀`}
+        tone={k.stalledTeams > 0 ? 'warn' : undefined}
+        meter={k.studyProgress ?? 0}
+        onClick={setView}
+      />
+      <Kpi
+        stage="showcase"
+        label="누적 수료"
+        value={`${k.graduated}명`}
+        sub={`발표 완료 ${k.presentedTeams}팀 · 대기 ${k.readyTeams}팀`}
+        onClick={setView}
+      />
     </div>
   );
 }
 
-function Kpi(props: { label: string; value: string; sub: string; tone?: string; meter?: number }) {
+function Kpi(props: {
+  stage: StageKey;
+  label: string;
+  value: string;
+  sub: string;
+  tone?: string;
+  meter?: number;
+  onClick: (stage: StageKey) => void;
+}) {
   return (
-    <div className={`kpi ${props.tone ?? ''}`}>
+    <button
+      className={`kpi ${props.tone ?? ''}`}
+      style={{ ['--stage' as string]: STAGE_COLOR[props.stage] }}
+      onClick={() => props.onClick(props.stage)}
+      title="이 단계로 이동"
+    >
       <div className="kpi-label">{props.label}</div>
       <div className="kpi-value">{props.value}</div>
       <div className="kpi-sub">{props.sub}</div>
@@ -93,6 +129,6 @@ function Kpi(props: { label: string; value: string; sub: string; tone?: string; 
           <div style={{ width: `${Math.round(props.meter * 100)}%` }} />
         </div>
       )}
-    </div>
+    </button>
   );
 }

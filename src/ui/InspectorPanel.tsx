@@ -1,9 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import type { Session } from '../data/types';
+import { STAGE_ORDER } from '../data/layout';
+import type { Participant, StageKey } from '../data/types';
 import { useMaestroStore } from '../store/useMaestroStore';
-import { isLowStock, parseCabinetKey } from '../store/selectors';
-import { ASSISTANT_STATUS, COHORT_STATUS, ROOM_STATUS, SESSION_STATUS, TRACK } from '../theme';
-import { ago, clock, relTime } from './format';
+import { attendanceRate, needsAttention } from '../store/selectors';
+import { STAGE_COLOR, STALLED_COLOR, STATUS, TEAM_PHASE, milestone } from '../theme';
+import { ago, clock, pct } from './format';
 
 /** Re-render every second so "n초 전" stays accurate between sim ticks. */
 function useNow(ms = 1000) {
@@ -32,10 +33,9 @@ export function InspectorPanel() {
           <button className="close" onClick={() => select(null)} aria-label="닫기">
             ✕
           </button>
-          {selection.kind === 'cohort' && <CohortDetails id={selection.id} />}
-          {selection.kind === 'assistant' && <AssistantDetails id={selection.id} />}
-          {selection.kind === 'room' && <RoomDetails id={selection.id} />}
-          {selection.kind === 'cabinet' && <CabinetDetails cabinetKey={selection.id} />}
+          {selection.kind === 'participant' && <ParticipantDetails id={selection.id} />}
+          {selection.kind === 'team' && <TeamDetails id={selection.id} />}
+          {selection.kind === 'facility' && <FacilityDetails id={selection.id} />}
         </>
       )}
     </aside>
@@ -69,6 +69,14 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+function Meter({ value, tone }: { value: number; tone: 'good' | 'warn' | 'bad' }) {
+  return (
+    <div className={`battery ${tone}`}>
+      <div style={{ width: `${Math.max(0, Math.min(1, value)) * 100}%` }} />
+    </div>
+  );
+}
+
 function Updated({ ts }: { ts: number }) {
   const now = useNow();
   return (
@@ -79,164 +87,172 @@ function Updated({ ts }: { ts: number }) {
   );
 }
 
-function SessionCard({ session }: { session: Session | null }) {
-  const materials = useMaestroStore((s) => s.materials);
-  const now = useNow();
-  if (!session) return <div className="card muted">진행 중인 세션 없음</div>;
-  const st = SESSION_STATUS[session.status];
-  const late = session.checkedInAt !== null ? session.checkedInAt > session.startAt : session.startAt < now;
+/** Four-step journey strip with the current stage lit. */
+function Journey({ current, done }: { current: StageKey; done: boolean }) {
+  const stages = useMaestroStore((s) => s.stages);
+  const at = STAGE_ORDER.indexOf(current);
   return (
-    <div className="card">
-      <div className="row">
-        <strong>{session.title}</strong>
-        <span style={{ color: st.color }}>{st.label}</span>
-      </div>
-      <Rows>
-        <Row label="유형">{session.kind === 'lecture' ? '강의' : '실습'} · {session.reference}</Row>
-        <Row label="시작">
-          {clock(session.startAt)} <span className={late ? 'bad-text' : 'muted'}>({relTime(session.startAt, now)})</span>
-        </Row>
-        {session.checkedInAt && <Row label="입실">{clock(session.checkedInAt)}</Row>}
-      </Rows>
-      <ul className="lines">
-        {session.lines.map((l, i) => {
-          const m = materials[l.materialId];
-          return (
-            <li key={i}>
-              <span>{m?.name ?? l.materialId}</span>
-              <span className="muted">{l.quantity}개</span>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
+    <ol className="journey">
+      {STAGE_ORDER.map((id, i) => (
+        <li
+          key={id}
+          className={done || i < at ? 'past' : i === at ? 'now' : ''}
+          style={{ ['--stage' as string]: STAGE_COLOR[id] }}
+        >
+          <span>0{i + 1}</span>
+          {stages[id].name}
+        </li>
+      ))}
+    </ol>
   );
 }
 
-function CohortDetails({ id }: { id: string }) {
-  const cohort = useMaestroStore((s) => s.cohorts[id]);
-  const room = useMaestroStore((s) => (cohort?.roomId ? s.rooms[cohort.roomId] : null));
-  const session = useMaestroStore((s) => (cohort?.sessionId ? s.sessions[cohort.sessionId] : null));
-  const campus = useMaestroStore((s) => (cohort ? s.campuses[cohort.campusId] : null));
-  if (!cohort || !campus) return null;
-  const track = TRACK[cohort.track];
-  return (
-    <>
-      <Header kind="교육 차수" title={cohort.name} status={COHORT_STATUS[cohort.status]} sub={`${track.label} 과정 · ${campus.name}`} />
-      <Rows>
-        <Row label="강사">{cohort.instructor}</Row>
-        <Row label="수강 인원">{cohort.learners}명</Row>
-        <Row label="주요 소속">{cohort.department}</Row>
-        <Row label="교육실">{room?.label ?? '—'}</Row>
-      </Rows>
-      <h4>현재 세션</h4>
-      <SessionCard session={session} />
-      <Updated ts={cohort.lastUpdate} />
-    </>
-  );
-}
-
-function AssistantDetails({ id }: { id: string }) {
-  const bot = useMaestroStore((s) => s.assistants[id]);
-  const session = useMaestroStore((s) => (bot?.sessionId ? s.sessions[bot.sessionId] : null));
-  const campus = useMaestroStore((s) => (bot ? s.campuses[bot.campusId] : null));
-  if (!bot || !campus) return null;
-  const batteryTone = bot.battery < 20 ? 'bad' : bot.battery < 50 ? 'warn' : 'good';
-  return (
-    <>
-      <Header kind="실습 지원 로봇" title={bot.name} status={ASSISTANT_STATUS[bot.status]} sub={campus.name} />
-      <Rows>
-        <Row label="담당 조교">{bot.supervisor}</Row>
-        <Row label="배터리">
-          <div className={`battery ${batteryTone}`}>
-            <div style={{ width: `${bot.battery}%` }} />
-          </div>
-          {Math.round(bot.battery)}%
-        </Row>
-        <Row label="위치">
-          x {bot.position.x.toFixed(1)}, z {bot.position.z.toFixed(1)}
-        </Row>
-      </Rows>
-      <h4>지원 중인 세션</h4>
-      <SessionCard session={session} />
-      <Updated ts={bot.lastUpdate} />
-    </>
-  );
-}
-
-function RoomDetails({ id }: { id: string }) {
-  const room = useMaestroStore((s) => s.rooms[id]);
-  const cohort = useMaestroStore((s) => (room?.cohortId ? s.cohorts[room.cohortId] : null));
-  const session = useMaestroStore((s) => (cohort?.sessionId ? s.sessions[cohort.sessionId] : null));
-  const campus = useMaestroStore((s) => (room ? s.campuses[room.campusId] : null));
+function PersonLink({ p }: { p: Participant }) {
   const select = useMaestroStore((s) => s.select);
-  if (!room || !campus) return null;
+  return (
+    <button className="link" onClick={() => select({ kind: 'participant', id: p.id })}>
+      {p.name}
+    </button>
+  );
+}
+
+function ParticipantDetails({ id }: { id: string }) {
+  const p = useMaestroStore((s) => s.participants[id]);
+  const team = useMaestroStore((s) => (p?.teamId ? s.teams[p.teamId] : null));
+  const teams = useMaestroStore((s) => s.teams);
+  const facility = useMaestroStore((s) => (p?.facilityId ? s.facilities[p.facilityId] : null));
+  const select = useMaestroStore((s) => s.select);
+  if (!p) return <div className="card muted">이 참가자는 프로그램을 마치고 퇴장했습니다.</div>;
+
+  const rate = attendanceRate(p);
+  const rateTone = rate === null ? 'good' : rate < 0.8 ? 'bad' : rate < 0.9 ? 'warn' : 'good';
   return (
     <>
-      <Header kind="교육실" title={room.label} status={ROOM_STATUS[room.status]} sub={campus.name} />
+      <Header kind={`참가자 · ${p.generation}기`} title={p.name} status={STATUS[p.status]} sub={`${p.department} ${p.title}`} />
+      <Journey current={p.stage} done={p.status === 'graduated'} />
+      {needsAttention(p, teams) && <div className="alert">관리 필요: {p.status === 'training' ? '출석률 80% 미만' : '소속 팀 진행 정체'}</div>}
       <Rows>
-        <Row label="좌석">{room.seats}석</Row>
-        <Row label="사용 차수">
-          {cohort ? (
-            <button className="link" onClick={() => select({ kind: 'cohort', id: cohort.id })}>
-              {cohort.name} · {COHORT_STATUS[cohort.status].label}
+        <Row label="현재 위치">{facility?.label ?? '이동·대기 중'}</Row>
+        <Row label="선발 점수">{p.score !== null ? `${p.score}점` : '심사 전'}</Row>
+        {p.sessionsHeld > 0 && (
+          <Row label="출석률">
+            <Meter value={rate ?? 0} tone={rateTone} />
+            {pct(rate)} ({p.sessionsAttended}/{p.sessionsHeld}회)
+          </Row>
+        )}
+        {(p.stage !== 'selection' || p.assignmentsDone > 0) && (
+          <Row label="과제">
+            <Meter value={p.assignmentsDone / p.assignmentsTotal} tone="good" />
+            {p.assignmentsDone}/{p.assignmentsTotal}
+          </Row>
+        )}
+        <Row label="스터디 팀">
+          {team ? (
+            <button className="link" onClick={() => select({ kind: 'team', id: team.id })}>
+              {team.name}
             </button>
           ) : (
             '—'
           )}
         </Row>
       </Rows>
-      <h4>현재 세션</h4>
-      <SessionCard session={session} />
-      <Updated ts={room.lastUpdate} />
+      <Updated ts={p.lastUpdate} />
     </>
   );
 }
 
-function CabinetDetails({ cabinetKey }: { cabinetKey: string }) {
-  const { campusId, aisle, bay } = parseCabinetKey(cabinetKey);
-  const campus = useMaestroStore((s) => s.campuses[campusId]);
-  const materials = useMaestroStore((s) => s.materials);
-  const items = Object.values(materials)
-    .filter((m) => m.campusId === campusId && m.location.aisle === aisle && m.location.bay === bay)
-    .sort((a, b) => b.location.level - a.location.level);
-  const low = items.some(isLowStock);
-  const now = useNow();
+function TeamDetails({ id }: { id: string }) {
+  const team = useMaestroStore((s) => s.teams[id]);
+  const participants = useMaestroStore((s) => s.participants);
+  if (!team) return <div className="card muted">이 팀은 성과공유회를 마치고 해산했습니다.</div>;
+  const color = team.stalled ? STALLED_COLOR : TEAM_PHASE[team.phase].color;
+  const members = team.memberIds.map((mid) => participants[mid]).filter(Boolean);
   return (
     <>
       <Header
-        kind="교보재 보관함"
-        title={`${aisle}열 ${bay}번 보관함`}
-        sub={campus?.name}
-        status={low ? { label: '교보재 부족', color: '#ef4444' } : { label: items.length ? '정상' : '등록 품목 없음', color: items.length ? '#22c55e' : '#6b7280' }}
+        kind="스터디 팀"
+        title={team.name}
+        status={team.stalled ? { label: '진행 정체 · 멘토 지원 필요', color: STALLED_COLOR } : TEAM_PHASE[team.phase]}
+        sub={`멘토 ${team.mentor}`}
       />
-      <h4>보관 품목</h4>
-      {items.length === 0 && <div className="card muted">이 보관함에 등록된 교보재가 없습니다.</div>}
-      {items.map((it) => {
-        const ratio = Math.min(1, it.quantity / (it.reorderPoint * 3));
-        const isLow = isLowStock(it);
-        return (
-          <div className="card" key={it.id}>
-            <div className="row">
-              <strong>{it.name}</strong>
-              <span className="muted">{it.location.level}단</span>
-            </div>
-            <div className="row muted">
-              <span>{it.sku}</span>
-              <span className={isLow ? 'bad-text' : ''}>
-                {it.quantity}개 / 재주문점 {it.reorderPoint}
-              </span>
-            </div>
-            <div className={`battery ${isLow ? 'bad' : 'good'}`}>
-              <div style={{ width: `${ratio * 100}%` }} />
-            </div>
+      <h4>프로젝트</h4>
+      <div className="card">
+        <div className="row">
+          <strong>{team.topic}</strong>
+          <span style={{ color }}>{Math.round(team.progress)}%</span>
+        </div>
+        <div className="bar big">
+          <div style={{ width: `${team.progress}%`, background: color }} />
+        </div>
+        <div className="row muted tiny">현재 단계: {milestone(team.progress)}</div>
+        {team.award && (
+          <div className="row">
+            <span>시상</span>
+            <strong className="award">🏆 {team.award}</strong>
           </div>
-        );
-      })}
-      <div className="updated">
-        <span className="pulse" />
-        재고 실시간 반영 · {clock(now)}
+        )}
       </div>
+      <h4>팀원 {members.length}명</h4>
+      <ul className="lines members">
+        {members.map((m) => (
+          <li key={m.id}>
+            <PersonLink p={m} />
+            <span className="muted">
+              {m.department} · {STATUS[m.status].label}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <Updated ts={team.lastUpdate} />
+    </>
+  );
+}
+
+function FacilityDetails({ id }: { id: string }) {
+  const f = useMaestroStore((s) => s.facilities[id]);
+  const participants = useMaestroStore((s) => s.participants);
+  const teams = useMaestroStore((s) => s.teams);
+  const stages = useMaestroStore((s) => s.stages);
+  const select = useMaestroStore((s) => s.select);
+  if (!f) return null;
+  const occupants = Object.values(participants)
+    .filter((p) => p.facilityId === f.id)
+    .sort((a, b) => (a.seat ?? 0) - (b.seat ?? 0));
+  const team =
+    f.kind === 'table'
+      ? Object.values(teams).find((t) => t.tableId === f.id)
+      : f.kind === 'stage'
+        ? Object.values(teams).find((t) => t.phase === 'presenting')
+        : undefined;
+  const busy = occupants.length > 0;
+  return (
+    <>
+      <Header
+        kind={`${stages[f.stage].name} 구역`}
+        title={f.label}
+        status={busy ? { label: `사용 중 ${occupants.length}/${f.capacity}`, color: STAGE_COLOR[f.stage] } : { label: '비어 있음', color: '#6b7280' }}
+      />
+      {team && (
+        <Rows>
+          <Row label={f.kind === 'stage' ? '발표 팀' : '사용 팀'}>
+            <button className="link" onClick={() => select({ kind: 'team', id: team.id })}>
+              {team.name} · {Math.round(team.progress)}%
+            </button>
+          </Row>
+        </Rows>
+      )}
+      <h4>현재 인원</h4>
+      {occupants.length === 0 && <div className="card muted">지금은 아무도 없습니다.</div>}
+      <ul className="lines members">
+        {occupants.map((p) => (
+          <li key={p.id}>
+            <PersonLink p={p} />
+            <span className="muted">
+              {p.department} · {STATUS[p.status].label}
+            </span>
+          </li>
+        ))}
+      </ul>
     </>
   );
 }

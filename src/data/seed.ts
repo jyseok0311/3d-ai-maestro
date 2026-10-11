@@ -1,26 +1,6 @@
-import {
-  AISLES,
-  BAYS,
-  CAMPUS_SPACING,
-  CHARGER,
-  LEVELS,
-  PREP_ZONE,
-  ROOM_COUNT,
-  TRAVEL_AISLE_Z,
-} from './layout';
-import type {
-  Assistant,
-  Campus,
-  Cohort,
-  CohortStatus,
-  Material,
-  MaterialCategory,
-  Room,
-  Session,
-  SessionKind,
-  Track,
-  WorldData,
-} from './types';
+import { FACILITY_SPECS, STAGE_ORDER, zoneX } from './layout';
+import { DEPARTMENTS, MENTORS, TEAM_NAMES, TITLES, TOPICS, makeName } from './people';
+import type { Facility, Participant, ParticipantStatus, Stage, StageKey, Team, WorldData } from './types';
 
 /** Deterministic PRNG so the seed is identical on every load. */
 export function mulberry32(seed: number): () => number {
@@ -34,246 +14,176 @@ export function mulberry32(seed: number): () => number {
   };
 }
 
-const pad = (n: number, w = 2) => String(n).padStart(w, '0');
-
-function byId<T extends { id: string }>(list: T[]): Record<string, T> {
-  return Object.fromEntries(list.map((x) => [x.id, x]));
-}
-
-const CAMPUS_DEFS = [
-  { code: 'JJ', name: '장전캠퍼스 AI교육관', address: '부산 금정구' },
-  { code: 'YS', name: '양산캠퍼스 AI교육관', address: '경남 양산시' },
-  { code: 'MY', name: '밀양캠퍼스 AI교육관', address: '경남 밀양시' },
-];
-
-const ROOM_NAMES = ['AI 실습실 1', 'AI 실습실 2', '프롬프트 랩', '자동화 랩', '데이터 랩', '세미나실'];
-
-const TRACKS: Track[] = ['basic', 'prompt', 'automation', 'data'];
-const DEPARTMENTS = ['학사과', '입학과', '재무과', '연구지원과', '시설과', '국제교류과', '도서관', '총무과'];
-const INSTRUCTORS = ['김하늘', '이도현', '박서연', '최지훈', '정예린', '강민준', '조수빈', '윤태호', '장은지', '임재원', '한소희', '오성민'];
-const TA_NAMES = ['서지안', '권하린', '황유나', '송민서', '안채원', '배지우', '유수아', '홍다은'];
-
-const MATERIAL_DEFS: { name: string; category: MaterialCategory }[] = [
-  { name: 'AI 실습용 노트북', category: 'device' },
-  { name: '태블릿 PC', category: 'device' },
-  { name: 'VR 헤드셋', category: 'device' },
-  { name: '웹캠·마이크 세트', category: 'av' },
-  { name: '무선 프레젠터', category: 'av' },
-  { name: '휴대용 스피커', category: 'av' },
-  { name: 'GPU 클라우드 실습 키트', category: 'kit' },
-  { name: '업무자동화 실습 키트', category: 'kit' },
-  { name: '데이터 분석 샘플셋', category: 'kit' },
-  { name: '챗봇 만들기 키트', category: 'kit' },
-  { name: '생성형 AI 기초 교재', category: 'textbook' },
-  { name: '프롬프트 워크북', category: 'textbook' },
-  { name: '업무자동화 가이드북', category: 'textbook' },
-  { name: '데이터 리터러시 교재', category: 'textbook' },
-  { name: 'AI 윤리·보안 핸드북', category: 'textbook' },
-  { name: '실습 계정 안내 카드', category: 'consumable' },
-  { name: '수료증 용지', category: 'consumable' },
-  { name: '명찰·이름표', category: 'consumable' },
-  { name: '포스트잇·필기구 세트', category: 'consumable' },
-  { name: '설문지·평가지', category: 'consumable' },
-];
-
-export const SESSION_TITLES: Record<Track, string[]> = {
-  basic: ['생성형 AI 이해', 'AI 도구 첫걸음', 'AI 윤리와 보안'],
-  prompt: ['업무 프롬프트 설계', '공문서 초안 작성', '회의록 요약 실습'],
-  automation: ['반복업무 자동화', '엑셀 업무 AI 활용', '메일 자동 분류'],
-  data: ['데이터 시각화 기초', '행정 데이터 분석', '대시보드 만들기'],
+const STAGE_DEFS: Record<StageKey, { name: string; subtitle: string }> = {
+  selection: { name: '선발', subtitle: '지원 · 서류심사 · 면접' },
+  training: { name: '교육', subtitle: 'AI 실무 교육 8회차' },
+  study: { name: '자율스터디', subtitle: '팀 프로젝트 · 멘토링' },
+  showcase: { name: '성과공유회', subtitle: '발표 · 시상 · 수료' },
 };
 
-/** Build the seed relative to `now` so start times are always meaningful. */
+export const ASSIGNMENTS_TOTAL = 4;
+export const SESSIONS_TO_FINISH = 8;
+
+/** Stage a participant status belongs to. */
+export function stageOf(status: ParticipantStatus): StageKey {
+  switch (status) {
+    case 'applied':
+    case 'screening':
+    case 'interview':
+    case 'not_selected':
+      return 'selection';
+    case 'selected':
+    case 'training':
+      return 'training';
+    case 'study_wait':
+    case 'studying':
+      return 'study';
+    default:
+      return 'showcase';
+  }
+}
+
+export function newParticipant(
+  rand: () => number,
+  id: string,
+  generation: number,
+  status: ParticipantStatus,
+  now: number,
+): Participant {
+  return {
+    id,
+    name: makeName(rand),
+    department: DEPARTMENTS[Math.floor(rand() * DEPARTMENTS.length)],
+    title: TITLES[Math.floor(rand() * TITLES.length)],
+    generation,
+    stage: stageOf(status),
+    status,
+    facilityId: null,
+    seat: null,
+    teamId: null,
+    score: null,
+    sessionsHeld: 0,
+    sessionsAttended: 0,
+    assignmentsDone: 0,
+    assignmentsTotal: ASSIGNMENTS_TOTAL,
+    lastUpdate: now,
+  };
+}
+
+export function newTeam(id: string, n: number, now: number): Team {
+  return {
+    id,
+    name: `${TEAM_NAMES[n % TEAM_NAMES.length]}팀`,
+    topic: TOPICS[n % TOPICS.length],
+    mentor: MENTORS[n % MENTORS.length],
+    memberIds: [],
+    tableId: null,
+    phase: 'forming',
+    progress: 0,
+    stalled: false,
+    award: null,
+    readyAt: null,
+    lastUpdate: now,
+  };
+}
+
+/** Build the seed: one snapshot with people at every step of the journey. */
 export function createSeed(now: number = Date.now()): WorldData {
   const rand = mulberry32(20261011);
-  const pick = <T,>(arr: readonly T[]) => arr[Math.floor(rand() * arr.length)];
   const randInt = (min: number, max: number) => min + Math.floor(rand() * (max - min + 1));
+  let seq = 0;
+  const nextId = (prefix: string) => `${prefix}-${String(++seq).padStart(3, '0')}`;
 
-  // ── Campuses ──────────────────────────────────────────────────────────
-  const campuses: Campus[] = CAMPUS_DEFS.map((def, i) => ({
-    id: `campus-${i + 1}`,
-    ...def,
-    origin: { x: (i - (CAMPUS_DEFS.length - 1) / 2) * CAMPUS_SPACING, z: 0 },
-  }));
+  const stages = Object.fromEntries(
+    STAGE_ORDER.map((id, i) => [id, { id, order: i + 1, ...STAGE_DEFS[id], origin: { x: zoneX(id), z: 0 } } satisfies Stage]),
+  ) as Record<StageKey, Stage>;
 
-  // ── Rooms: 6 per campus ───────────────────────────────────────────────
-  const rooms: Room[] = campuses.flatMap((campus) =>
-    Array.from({ length: ROOM_COUNT }, (_, i) => ({
-      id: `${campus.id}-room-${i + 1}`,
-      campusId: campus.id,
-      index: i,
-      label: `${campus.code}-${ROOM_NAMES[i]}`,
-      seats: i === 5 ? 40 : 24,
-      status: 'free' as const,
-      cohortId: null,
-      lastUpdate: now,
-    })),
-  );
-  // One room is being serviced on the second campus.
-  rooms[ROOM_COUNT + 5].status = 'maintenance';
-
-  // ── Materials: 40 spread across campuses and cabinets ────────────────
-  const usedSlots = new Set<string>();
-  const materials: Material[] = Array.from({ length: 40 }, (_, i) => {
-    const campus = campuses[i % campuses.length];
-    const def = MATERIAL_DEFS[i % MATERIAL_DEFS.length];
-    let location;
-    do {
-      location = { aisle: pick(AISLES), bay: randInt(1, BAYS), level: randInt(1, LEVELS) };
-    } while (usedSlots.has(`${campus.id}${location.aisle}${location.bay}${location.level}`));
-    usedSlots.add(`${campus.id}${location.aisle}${location.bay}${location.level}`);
-    const reorderPoint = randInt(2, 6) * 5;
-    // ~20 % of materials start at or below their reorder point.
-    const quantity = rand() < 0.2 ? randInt(2, reorderPoint) : randInt(reorderPoint + 10, reorderPoint * 5);
-    return {
-      id: `mat-${pad(i + 1, 3)}`,
-      campusId: campus.id,
-      sku: `${def.category.slice(0, 3).toUpperCase()}-${pad(100 + i * 7, 4)}`,
-      name: def.name,
-      category: def.category,
-      quantity,
-      reorderPoint,
-      location,
-    };
-  });
-
-  // ── Cohorts: 12, four per campus, in a spread of lifecycle states ────
-  const cohortStates: CohortStatus[] = ['practice', 'lecture', 'checked_in', 'waiting', 'moving', 'break'];
-  const cohorts: Cohort[] = Array.from({ length: 12 }, (_, i) => {
-    const track = TRACKS[i % TRACKS.length];
-    return {
-      id: `cohort-${pad(i + 1)}`,
-      name: `${3 + Math.floor(i / 6)}기 ${(i % 6) + 1}반`,
-      track,
-      instructor: INSTRUCTORS[i],
-      department: DEPARTMENTS[i % DEPARTMENTS.length],
-      learners: randInt(14, 24),
-      campusId: campuses[i % campuses.length].id,
-      status: cohortStates[(i + Math.floor(i / 3)) % cohortStates.length],
-      roomId: null,
-      sessionId: null,
-      lastUpdate: now - randInt(5, 120) * 1000,
-    };
-  });
-
-  // Seat every cohort that is in class into a free room of its campus.
-  for (const cohort of cohorts) {
-    if (!['checked_in', 'lecture', 'practice'].includes(cohort.status)) continue;
-    const room = rooms.find((r) => r.campusId === cohort.campusId && r.status === 'free');
-    if (!room) {
-      cohort.status = 'waiting';
-      continue;
+  const facilities: Record<string, Facility> = {};
+  for (const spec of FACILITY_SPECS) {
+    for (let i = 0; i < spec.count; i++) {
+      const id = `${spec.kind}-${i + 1}`;
+      facilities[id] = { id, stage: spec.stage, kind: spec.kind, index: i, label: spec.label(i), capacity: spec.capacity };
     }
-    room.status = 'in_session';
-    room.cohortId = cohort.id;
-    cohort.roomId = room.id;
   }
 
-  // ── Sessions: 25 with start times ─────────────────────────────────────
-  const sessions: Session[] = [];
-  const minute = 60_000;
-  const makeLines = (campusId: string) => {
-    const campusMaterials = materials.filter((m) => m.campusId === campusId);
-    return Array.from({ length: randInt(1, 3) }, () => ({
-      materialId: pick(campusMaterials).id,
-      quantity: randInt(1, 4) * 5,
-    }));
-  };
-  const addSession = (s: Omit<Session, 'id' | 'reference' | 'title' | 'lines' | 'lastUpdate'>, track: Track) => {
-    const n = sessions.length + 1;
-    sessions.push({
-      id: `ses-${pad(n, 3)}`,
-      reference: `S-2610-${pad(n, 4)}`,
-      title: pick(SESSION_TITLES[track]),
-      lines: makeLines(s.campusId),
-      lastUpdate: now,
-      ...s,
-    });
-    return sessions[sessions.length - 1];
+  const participants: Record<string, Participant> = {};
+  const add = (generation: number, status: ParticipantStatus, patch: Partial<Participant> = {}) => {
+    const p = { ...newParticipant(rand, nextId('p'), generation, status, now - randInt(1, 90) * 1000), ...patch };
+    participants[p.id] = p;
+    return p;
   };
 
-  // 1) One session for every cohort that is not on a break.
-  for (const cohort of cohorts) {
-    if (cohort.status === 'break') continue;
-    const inRoom = cohort.roomId !== null;
-    const kind: SessionKind = cohort.status === 'practice' ? 'practice' : cohort.status === 'lecture' ? 'lecture' : pick(['lecture', 'practice'] as const);
-    const startAt = inRoom ? now - randInt(5, 40) * minute : now + randInt(-6, 4) * minute;
-    const session = addSession(
-      {
-        campusId: cohort.campusId,
-        kind,
-        status: inRoom ? 'in_progress' : startAt < now ? 'late' : 'moving',
-        cohortId: cohort.id,
-        roomId: cohort.roomId,
-        startAt,
-        checkedInAt: inRoom ? startAt + randInt(-10, 12) * minute : null,
-      },
-      cohort.track,
-    );
-    cohort.sessionId = session.id;
-  }
+  // ① Selection (5기): queue, three at booths, two in interviews.
+  for (let i = 0; i < 6; i++) add(5, 'applied');
+  for (let i = 0; i < 3; i++) add(5, 'screening', { facilityId: `booth-${i + 1}`, seat: 0 });
+  for (let i = 0; i < 2; i++) add(5, 'interview', { facilityId: `interview-${i + 1}`, seat: 0, score: randInt(72, 92) });
 
-  // 2) Completed history so the on-time rate starts meaningful.
-  while (sessions.length < 19) {
-    const campus = pick(campuses);
-    const startAt = now - randInt(60, 360) * minute;
-    addSession(
-      {
-        campusId: campus.id,
-        kind: pick(['lecture', 'practice'] as const),
-        status: 'completed',
-        cohortId: null,
-        roomId: pick(rooms.filter((r) => r.campusId === campus.id)).id,
-        startAt,
-        checkedInAt: startAt + (rand() < 0.75 ? -randInt(1, 15) : randInt(3, 25)) * minute,
-      },
-      pick(TRACKS),
-    );
-  }
+  // ② Training (4기): two just selected, 19 in three classrooms.
+  for (let i = 0; i < 2; i++) add(5, 'selected', { score: randInt(76, 95) });
+  [7, 6, 6].forEach((n, c) => {
+    for (let s = 0; s < n; s++) {
+      const held = randInt(1, 5);
+      add(4, 'training', {
+        facilityId: `classroom-${c + 1}`,
+        seat: s,
+        score: randInt(75, 96),
+        sessionsHeld: held,
+        // A couple of learners start with weak attendance.
+        sessionsAttended: rand() < 0.15 ? Math.max(0, held - 2) : held,
+        assignmentsDone: randInt(0, Math.min(3, held)),
+      });
+    }
+  });
 
-  // 3) Upcoming sessions with no class assigned yet.
-  while (sessions.length < 25) {
-    addSession(
-      {
-        campusId: pick(campuses).id,
-        kind: pick(['lecture', 'practice'] as const),
-        status: 'scheduled',
-        cohortId: null,
-        roomId: null,
-        startAt: now + randInt(1, 6) * minute,
-        checkedInAt: null,
-      },
-      pick(TRACKS),
-    );
+  // ③ Study (3기): four teams at tables 1–4, one waiting for a team.
+  const teams: Record<string, Team> = {};
+  let teamCount = 0;
+  const makeTeam = () => {
+    const t = newTeam(nextId('team'), teamCount++, now);
+    teams[t.id] = t;
+    return t;
+  };
+  const finishedTraining = { score: 0, sessionsHeld: 8, sessionsAttended: 8, assignmentsDone: ASSIGNMENTS_TOTAL };
+  for (let t = 0; t < 4; t++) {
+    const team = makeTeam();
+    team.phase = 'studying';
+    team.tableId = `table-${t + 1}`;
+    team.progress = [72, 45, 28, 61][t];
+    team.stalled = t === 2;
+    for (let s = 0; s < 4; s++) {
+      const p = add(3, 'studying', { ...finishedTraining, score: randInt(75, 96), facilityId: team.tableId, seat: s, teamId: team.id });
+      team.memberIds.push(p.id);
+    }
   }
+  add(4, 'study_wait', { ...finishedTraining, score: randInt(75, 96) });
 
-  // ── Assistant robots: 8 spread over campuses ─────────────────────────
-  const assistants: Assistant[] = Array.from({ length: 8 }, (_, i) => {
-    const onAisle = i % 2 === 0;
-    const position = onAisle
-      ? { x: randInt(-28, 4), z: TRAVEL_AISLE_Z[i % TRAVEL_AISLE_Z.length] }
-      : { x: randInt(PREP_ZONE.minX + 2, PREP_ZONE.maxX - 2), z: randInt(PREP_ZONE.minZ + 4, PREP_ZONE.maxZ - 2) };
-    const status = i === 7 ? 'charging' : i === 3 ? 'assisting' : 'idle';
-    return {
-      id: `ta-${pad(i + 1)}`,
-      name: `TA-${pad(i + 1)}`,
-      supervisor: TA_NAMES[i],
-      campusId: campuses[i % campuses.length].id,
-      status,
-      battery: status === 'charging' ? 18 : randInt(35, 98),
-      position: status === 'charging' ? { ...CHARGER } : position,
-      target: status === 'charging' ? { ...CHARGER } : position,
-      sessionId: null,
-      lastUpdate: now - randInt(1, 30) * 1000,
-    };
+  // ④ Showcase (3기): one team presenting, one waiting in the audience.
+  let audienceSeat = 0;
+  (['presenting', 'ready'] as const).forEach((phase) => {
+    const team = makeTeam();
+    team.phase = phase;
+    team.progress = 100;
+    team.readyAt = now - randInt(10, 60) * 1000;
+    for (let s = 0; s < 4; s++) {
+      const status = phase === 'presenting' ? 'presenting' : 'audience';
+      const p = add(3, status, {
+        ...finishedTraining,
+        score: randInt(75, 96),
+        teamId: team.id,
+        facilityId: phase === 'presenting' ? 'stage-1' : 'audience-1',
+        seat: phase === 'presenting' ? s : audienceSeat++,
+      });
+      team.memberIds.push(p.id);
+    }
   });
 
   return {
-    campuses: byId(campuses),
-    rooms: byId(rooms),
-    cohorts: byId(cohorts),
-    assistants: byId(assistants),
-    materials: byId(materials),
-    sessions: byId(sessions),
+    stages,
+    facilities,
+    participants,
+    teams,
+    events: [],
+    stats: { generation: 5, applied: 132, selected: 81, notSelected: 38, graduated: 44, presentedTeams: 11 },
+    seq,
   };
 }

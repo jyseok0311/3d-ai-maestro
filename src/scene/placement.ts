@@ -1,65 +1,65 @@
-import { LOBBY_Z, LOUNGE_X, LOUNGE_Z, POD_CENTER_Z, WALKWAY_Z, roomX } from '../data/layout';
-import type { Campus, Cohort, Room } from '../data/types';
+import { ENTRY_X, EXIT_X, LOBBY_Z, QUEUE_Z, ROAD_Z, seatSpot, zoneX, type Spot } from '../data/layout';
+import type { Facility, Participant, StageKey } from '../data/types';
 
-/** World-space transform of a cohort group; rot is a Y rotation (group faces +z). */
-export interface Placement {
-  x: number;
-  z: number;
-  rot: number;
-  /** Seated in a classroom (desk grid) rather than standing as a group. */
-  seated: boolean;
+/** Standing slots in a row (wrapping to a second row), zone-local. */
+function rowSlot(i: number, z: number): { x: number; z: number } {
+  const perRow = 18;
+  return { x: -21 + (i % perRow) * 2.5, z: z + Math.floor(i / perRow) * 2.4 };
 }
 
 /**
- * Pure geometry: where each cohort should stand given its status. Cohorts of
- * the same status on the same campus get consecutive slots, ordered by id.
+ * Pure geometry: the world-space spot for every participant given status,
+ * facility and seat. People without a seat queue in their zone's lobby row,
+ * ordered by id so the slots stay stable between ticks.
  */
-export function computeCohortPlacements(
-  cohorts: Record<string, Cohort>,
-  rooms: Record<string, Room>,
-  campuses: Record<string, Campus>,
-): Record<string, Placement> {
-  const out: Record<string, Placement> = {};
-  const slots = new Map<string, number>();
-  const nextSlot = (key: string) => {
-    const n = slots.get(key) ?? 0;
-    slots.set(key, n + 1);
+export function computeSpots(
+  participants: Record<string, Participant>,
+  facilities: Record<string, Facility>,
+): Record<string, Spot> {
+  const out: Record<string, Spot> = {};
+  const counters = new Map<string, number>();
+  const next = (key: string) => {
+    const n = counters.get(key) ?? 0;
+    counters.set(key, n + 1);
     return n;
   };
+  const inZone = (stage: StageKey, s: { x: number; z: number }, extra: Partial<Spot> = {}): Spot => ({
+    x: zoneX(stage) + s.x,
+    z: s.z,
+    rot: Math.PI,
+    seated: false,
+    ...extra,
+  });
 
-  const sorted = Object.values(cohorts).sort((a, b) => a.id.localeCompare(b.id));
-  for (const c of sorted) {
-    const o = campuses[c.campusId].origin;
-    const room = c.roomId ? rooms[c.roomId] : null;
-    let p: Omit<Placement, 'seated'>;
-    let seated = false;
-
-    switch (c.status) {
-      case 'checked_in':
-      case 'lecture':
-      case 'practice':
-        if (room) {
-          // Facing the screen on the building side of the pod.
-          p = { x: roomX(room.index), z: POD_CENTER_Z + 0.6, rot: Math.PI };
-          seated = c.status !== 'checked_in';
-        } else {
-          p = { x: 0, z: LOBBY_Z, rot: Math.PI };
-        }
-        break;
-      case 'waiting':
-        p = { x: 30 - nextSlot(`${c.campusId}:w`) * 9, z: LOBBY_Z, rot: Math.PI };
-        break;
-      case 'moving':
-        p = { x: -46 + nextSlot(`${c.campusId}:m`) * 12, z: WALKWAY_Z + 2, rot: Math.PI / 2 };
-        break;
-      case 'leaving':
-        p = { x: 40 - nextSlot(`${c.campusId}:l`) * 12, z: WALKWAY_Z - 2, rot: -Math.PI / 2 };
-        break;
-      case 'break':
-      default:
-        p = { x: LOUNGE_X, z: LOUNGE_Z + nextSlot(`${c.campusId}:b`) * 5, rot: -Math.PI / 2 };
+  const sorted = Object.values(participants).sort((a, b) => a.id.localeCompare(b.id));
+  for (const p of sorted) {
+    const f = p.facilityId ? facilities[p.facilityId] : null;
+    if (f && p.seat !== null) {
+      const s = seatSpot(f, p.seat);
+      out[p.id] = { ...s, x: zoneX(f.stage) + s.x };
+      continue;
     }
-    out[c.id] = { x: o.x + p.x, z: o.z + p.z, rot: p.rot, seated };
+    switch (p.status) {
+      case 'applied':
+        out[p.id] = inZone('selection', rowSlot(next('queue'), QUEUE_Z));
+        break;
+      case 'selected':
+        out[p.id] = inZone('training', rowSlot(next('train-lobby'), LOBBY_Z));
+        break;
+      case 'study_wait':
+        out[p.id] = inZone('study', rowSlot(next('study-lobby'), LOBBY_Z));
+        break;
+      case 'not_selected':
+        // Back along the road to where they came in.
+        out[p.id] = { x: ENTRY_X - next('out-left') * 2, z: ROAD_Z - 1.5, rot: -Math.PI / 2, seated: false };
+        break;
+      case 'graduated':
+        out[p.id] = { x: EXIT_X + next('out-right') * 2, z: ROAD_Z + 1.5, rot: Math.PI / 2, seated: false };
+        break;
+      default:
+        // E.g. a full audience: stand at the back of the hall.
+        out[p.id] = inZone('showcase', rowSlot(next('showcase-standing'), LOBBY_Z));
+    }
   }
   return out;
 }

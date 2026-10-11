@@ -2,39 +2,39 @@ import * as THREE from 'three';
 
 /**
  * Geometries shared by every instance of a model. Creating them once keeps
- * GPU memory flat no matter how many cohorts, robots or rooms exist.
+ * GPU memory flat no matter how many people, desks or tables exist.
  */
 export const GEO = {
   box: new THREE.BoxGeometry(1, 1, 1),
-  wheel: new THREE.CylinderGeometry(0.5, 0.5, 0.4, 12).rotateZ(Math.PI / 2),
   lamp: new THREE.SphereGeometry(0.22, 10, 8),
   body: new THREE.CapsuleGeometry(0.38, 0.8, 3, 8).translate(0, 0.8, 0),
   head: new THREE.SphereGeometry(0.31, 10, 8).translate(0, 1.92, 0),
   marker: new THREE.OctahedronGeometry(0.5, 0),
+  cylinder: new THREE.CylinderGeometry(1, 1, 1, 20),
+  leaves: new THREE.IcosahedronGeometry(1, 0),
 };
 
 const std = (color: string, extra: THREE.MeshStandardMaterialParameters = {}) =>
   new THREE.MeshStandardMaterial({ color, roughness: 0.8, metalness: 0.1, flatShading: true, ...extra });
 
 export const MAT = {
-  tire: std('#15171a', { roughness: 1 }),
-  robotShell: std('#e5e7eb', { roughness: 0.5 }),
-  robotDark: std('#24272c', { metalness: 0.4 }),
-  tray: std('#9ca3af', { metalness: 0.6, roughness: 0.4 }),
   skin: std('#f1c9a5', { roughness: 0.9 }),
-  slab: std('#262a31'),
-  lot: std('#191c21', { roughness: 1 }),
-  podFloor: std('#2b3340'),
+  staff: std('#64748b'),
+  ground: std('#191c21', { roughness: 1 }),
+  floor: std('#252a32'),
+  road: std('#2b3340'),
   wall: std('#3a3f47'),
-  trim: std('#4f9dff'),
-  doorFrame: std('#4b515b'),
-  door: std('#8b929c', { metalness: 0.3 }),
+  frame: std('#4b515b'),
   desk: std('#c8b08a'),
+  chair: std('#3b4352'),
+  dark: std('#24272c', { metalness: 0.4 }),
+  laptop: std('#9ca3af', { metalness: 0.6, roughness: 0.4 }),
+  stage: std('#2f2a22'),
+  gold: std('#fbbf24', { metalness: 0.8, roughness: 0.3 }),
+  leaf: std('#2f9e6b'),
+  pot: std('#8b6b4a'),
   glass: new THREE.MeshStandardMaterial({ color: '#cfe6ff', emissive: '#4f9dff', emissiveIntensity: 0.25, transparent: true, opacity: 0.12, roughness: 0.1, depthWrite: false }),
-  rackFrame: std('#4f9dff', { metalness: 0.3, roughness: 0.6 }),
-  rackShelf: std('#56606c', { metalness: 0.4 }),
   lineMark: new THREE.MeshBasicMaterial({ color: '#8fbfff' }),
-  charger: std('#1f2937'),
 };
 
 const lampCache = new Map<string, THREE.MeshStandardMaterial>();
@@ -68,7 +68,7 @@ export function dampAngle(current: number, target: number, lambda: number, dt: n
 }
 
 /** Text rendered to a canvas texture, for crisp in-world labels without DOM portals. */
-export function labelTexture(code: string, name: string, active: boolean): THREE.CanvasTexture {
+export function labelTexture(code: string, name: string, active: boolean, color = '#4f9dff'): THREE.CanvasTexture {
   const scale = 2;
   const font = `600 ${26 * scale}px 'Pretendard', 'Segoe UI', 'Malgun Gothic', sans-serif`;
   const codeFont = `700 ${22 * scale}px Consolas, monospace`;
@@ -84,13 +84,13 @@ export function labelTexture(code: string, name: string, active: boolean): THREE
   canvas.height = height;
   const ctx = canvas.getContext('2d')!;
   ctx.fillStyle = 'rgba(12,14,17,0.88)';
-  ctx.strokeStyle = active ? '#4f9dff' : '#3a3f47';
+  ctx.strokeStyle = active ? color : '#3a3f47';
   ctx.lineWidth = 3 * scale;
   ctx.beginPath();
   ctx.roundRect(2 * scale, 2 * scale, width - 4 * scale, height - 4 * scale, 8 * scale);
   ctx.fill();
   ctx.stroke();
-  ctx.fillStyle = active ? '#4f9dff' : '#8b94a1';
+  ctx.fillStyle = active ? color : '#8b94a1';
   ctx.beginPath();
   ctx.roundRect(12 * scale, 12 * scale, codeW, height - 24 * scale, 4 * scale);
   ctx.fill();

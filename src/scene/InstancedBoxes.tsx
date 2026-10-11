@@ -7,8 +7,16 @@ export interface BoxSpec {
   scale: [number, number, number];
 }
 
-/** Static, non-interactive boxes drawn in a single instanced draw call. */
-export function InstancedBoxes({ boxes, material }: { boxes: BoxSpec[]; material: THREE.Material }) {
+/** Static, non-interactive meshes (boxes by default) drawn in a single instanced draw call. */
+export function InstancedBoxes({
+  boxes,
+  material,
+  geometry = GEO.box,
+}: {
+  boxes: BoxSpec[];
+  material: THREE.Material;
+  geometry?: THREE.BufferGeometry;
+}) {
   const ref = useRef<THREE.InstancedMesh>(null);
 
   useLayoutEffect(() => {
@@ -20,7 +28,7 @@ export function InstancedBoxes({ boxes, material }: { boxes: BoxSpec[]; material
     boxes.forEach((b, i) => mesh.setMatrixAt(i, m.compose(p.set(...b.position), q, s.set(...b.scale))));
     mesh.instanceMatrix.needsUpdate = true;
     mesh.computeBoundingSphere();
-  }, [boxes]);
+  }, [boxes, material, geometry]);
 
-  return <instancedMesh ref={ref} args={[GEO.box, material, boxes.length]} raycast={() => null} />;
+  return <instancedMesh ref={ref} args={[geometry, material, boxes.length]} raycast={() => null} />;
 }

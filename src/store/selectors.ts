@@ -1,75 +1,79 @@
-import type { Cohort, Material, Session, WorldData } from '../data/types';
-import type { CampusFilter, Filters } from './useMaestroStore';
+import type { Participant, Team, WorldData } from '../data/types';
+import type { Filters } from './useMaestroStore';
 
-export const isLowStock = (m: Material) => m.quantity <= m.reorderPoint;
+export const ATTENDANCE_WARNING = 0.8;
 
-const inCampus = (campusId: CampusFilter) => (x: { campusId: string }) => campusId === 'all' || x.campusId === campusId;
-
-export interface Kpis {
-  onTimeRate: number | null;
-  onTimeCount: number;
-  checkedInCount: number;
-  roomsInUse: number;
-  roomsTotal: number;
-  activeCohorts: number;
-  cohortsTotal: number;
-  lowStock: number;
-  late: number;
+export function attendanceRate(p: Participant): number | null {
+  return p.sessionsHeld ? p.sessionsAttended / p.sessionsHeld : null;
 }
 
-export function computeKpis(
-  world: Pick<WorldData, 'rooms' | 'cohorts' | 'materials' | 'sessions'>,
-  campusId: CampusFilter,
-): Kpis {
-  const f = inCampus(campusId);
-  const sessions = Object.values(world.sessions).filter(f);
-  const checkedIn = sessions.filter((s) => s.checkedInAt !== null);
-  const onTime = checkedIn.filter((s) => (s.checkedInAt as number) <= s.startAt);
-  const rooms = Object.values(world.rooms).filter(f);
-  const cohorts = Object.values(world.cohorts).filter(f);
-  return {
-    onTimeRate: checkedIn.length ? onTime.length / checkedIn.length : null,
-    onTimeCount: onTime.length,
-    checkedInCount: checkedIn.length,
-    roomsInUse: rooms.filter((r) => r.status === 'in_session').length,
-    roomsTotal: rooms.length,
-    activeCohorts: cohorts.filter((c) => c.status !== 'break').length,
-    cohortsTotal: cohorts.length,
-    lowStock: Object.values(world.materials).filter(f).filter(isLowStock).length,
-    late: sessions.filter((s) => s.status === 'late').length,
-  };
-}
-
-/** Whether a cohort passes the current filters (used to hide it in the scene). */
-export function cohortMatches(cohort: Cohort, sessions: Record<string, Session>, filters: Filters): boolean {
-  if (filters.cohortStatus !== 'all' && cohort.status !== filters.cohortStatus) return false;
-  if (filters.lateOnly) {
-    const s = cohort.sessionId ? sessions[cohort.sessionId] : null;
-    if (!s || s.status !== 'late') return false;
+/** Weak attendance in training, or a member of a stalled study team. */
+export function needsAttention(p: Participant, teams: Record<string, Team>): boolean {
+  if (p.status === 'training') {
+    const rate = attendanceRate(p);
+    return rate !== null && p.sessionsHeld >= 3 && rate < ATTENDANCE_WARNING;
   }
+  if (p.status === 'studying' && p.teamId) return teams[p.teamId]?.stalled ?? false;
+  return false;
+}
+
+export function participantMatches(p: Participant, teams: Record<string, Team>, filters: Filters): boolean {
+  if (filters.stage !== 'all' && p.stage !== filters.stage) return false;
+  if (filters.attentionOnly && !needsAttention(p, teams)) return false;
   return true;
 }
 
-/** Sessions shown in the side list, most urgent first. */
-export function listSessions(
-  sessions: Record<string, Session>,
-  campusId: CampusFilter,
-  filters: Filters,
-  cohorts: Record<string, Cohort>,
-): Session[] {
-  const rank = { late: 0, in_progress: 1, moving: 2, scheduled: 3, completed: 4 } as const;
-  return Object.values(sessions)
-    .filter(inCampus(campusId))
-    .filter((s) => (filters.lateOnly ? s.status === 'late' : s.status !== 'completed'))
-    .filter((s) => {
-      if (filters.cohortStatus === 'all') return true;
-      const c = s.cohortId ? cohorts[s.cohortId] : null;
-      return c?.status === filters.cohortStatus;
-    })
-    .sort((a, b) => rank[a.status] - rank[b.status] || a.startAt - b.startAt);
+export interface Kpis {
+  selectionRate: number | null;
+  applied: number;
+  selected: number;
+  inSelection: number;
+  attendance: number | null;
+  assignmentRate: number | null;
+  inTraining: number;
+  studyProgress: number | null;
+  studyTeams: number;
+  stalledTeams: number;
+  graduated: number;
+  presentedTeams: number;
+  readyTeams: number;
+  attention: number;
 }
 
-export function parseCabinetKey(key: string) {
-  const [campusId, aisle, bay] = key.split(':');
-  return { campusId, aisle, bay: Number(bay) };
+export function computeKpis(world: Pick<WorldData, 'participants' | 'teams' | 'stats'>): Kpis {
+  const people = Object.values(world.participants);
+  const teams = Object.values(world.teams);
+  const { stats } = world;
+
+  const training = people.filter((p) => p.status === 'training');
+  const held = training.reduce((n, p) => n + p.sessionsHeld, 0);
+  const attended = training.reduce((n, p) => n + p.sessionsAttended, 0);
+  const assignments = training.reduce((n, p) => n + p.assignmentsDone, 0);
+  const assignmentSlots = training.reduce((n, p) => n + p.assignmentsTotal, 0);
+
+  const studying = teams.filter((t) => t.phase === 'studying' || t.phase === 'forming');
+  const decided = stats.selected + stats.notSelected;
+
+  return {
+    selectionRate: decided ? stats.selected / decided : null,
+    applied: stats.applied,
+    selected: stats.selected,
+    inSelection: people.filter((p) => p.stage === 'selection' && p.status !== 'not_selected').length,
+    attendance: held ? attended / held : null,
+    assignmentRate: assignmentSlots ? assignments / assignmentSlots : null,
+    inTraining: training.length,
+    studyProgress: studying.length ? studying.reduce((n, t) => n + t.progress, 0) / studying.length / 100 : null,
+    studyTeams: studying.length,
+    stalledTeams: studying.filter((t) => t.stalled).length,
+    graduated: stats.graduated,
+    presentedTeams: stats.presentedTeams,
+    readyTeams: teams.filter((t) => t.phase === 'ready').length,
+    attention: people.filter((p) => needsAttention(p, world.teams)).length,
+  };
+}
+
+/** Teams in journey order: on stage, ready, then studying by progress. */
+export function sortTeams(teams: Record<string, Team>): Team[] {
+  const rank = { presenting: 0, ready: 1, studying: 2, forming: 3, done: 4 } as const;
+  return Object.values(teams).sort((a, b) => rank[a.phase] - rank[b.phase] || b.progress - a.progress);
 }

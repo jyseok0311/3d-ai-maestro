@@ -1,27 +1,28 @@
 import { create } from 'zustand';
 import { mulberry32, createSeed } from '../data/seed';
-import type { CohortStatus, ID, WorldData } from '../data/types';
+import type { StageKey, WorldData } from '../data/types';
 import { simulateTick } from '../sim/simulate';
 
-export type SelectionKind = 'cohort' | 'assistant' | 'room' | 'cabinet';
+export type SelectionKind = 'participant' | 'team' | 'facility';
 export interface Selection {
   kind: SelectionKind;
-  /** For cabinets: `${campusId}:${aisle}:${bay}`. */
   id: string;
 }
 
-export type CampusFilter = ID | 'all';
+export type StageFilter = StageKey | 'all';
 
 export interface Filters {
-  lateOnly: boolean;
-  cohortStatus: CohortStatus | 'all';
+  /** Only show people who need attention (weak attendance, stalled team). */
+  attentionOnly: boolean;
+  /** Only show people in this stage. */
+  stage: StageFilter;
 }
 
 export interface CameraFocus {
   x: number;
   z: number;
   distance: number;
-  /** Bumped on every request so re-selecting the same campus re-flies. */
+  /** Bumped on every request so re-selecting the same stage re-flies. */
   seq: number;
 }
 
@@ -29,40 +30,46 @@ interface MaestroState extends WorldData {
   now: number;
   running: boolean;
   selection: Selection | null;
-  campusId: CampusFilter;
+  view: StageFilter;
   filters: Filters;
   cameraFocus: CameraFocus;
 
   tick: () => void;
   setRunning: (running: boolean) => void;
   select: (selection: Selection | null) => void;
-  setCampus: (campusId: CampusFilter) => void;
+  setView: (view: StageFilter) => void;
   setFilters: (patch: Partial<Filters>) => void;
 }
 
 export const SIM_INTERVAL_MS = 2000;
-const CAMPUS_DISTANCE = 105;
-const OVERVIEW_DISTANCE = 260;
+const STAGE_DISTANCE = 80;
+const OVERVIEW_DISTANCE = 250;
 
 const simRand = mulberry32(Date.now() & 0xffffffff);
 const seed = createSeed();
 
-function focusFor(world: WorldData, campusId: CampusFilter, seq: number): CameraFocus {
-  if (campusId === 'all') return { x: 0, z: 5, distance: OVERVIEW_DISTANCE, seq };
-  const { origin } = world.campuses[campusId];
-  return { x: origin.x - 6, z: origin.z + 9, distance: CAMPUS_DISTANCE, seq };
+/** `#selection`, `#training`, `#study` or `#showcase` opens the app on that stage. */
+function initialView(): StageFilter {
+  const hash = typeof location === 'undefined' ? '' : location.hash.slice(1);
+  return hash in seed.stages ? (hash as StageKey) : 'all';
 }
+const startView = initialView();
 
-const initialCampus = Object.keys(seed.campuses)[0];
+function focusFor(world: WorldData, view: StageFilter, seq: number): CameraFocus {
+  // Shifted west so the first zone clears the left panel.
+  if (view === 'all') return { x: -14, z: 4, distance: OVERVIEW_DISTANCE, seq };
+  const { origin } = world.stages[view];
+  return { x: origin.x - 4, z: origin.z + 6, distance: STAGE_DISTANCE, seq };
+}
 
 export const useMaestroStore = create<MaestroState>()((set, get) => ({
   ...seed,
   now: Date.now(),
   running: true,
   selection: null,
-  campusId: initialCampus,
-  filters: { lateOnly: false, cohortStatus: 'all' },
-  cameraFocus: focusFor(seed, initialCampus, 0),
+  view: startView,
+  filters: { attentionOnly: false, stage: 'all' },
+  cameraFocus: focusFor(seed, startView, 0),
 
   tick: () => {
     const now = Date.now();
@@ -70,7 +77,6 @@ export const useMaestroStore = create<MaestroState>()((set, get) => ({
   },
   setRunning: (running) => set({ running }),
   select: (selection) => set({ selection }),
-  setCampus: (campusId) =>
-    set({ campusId, cameraFocus: focusFor(get(), campusId, get().cameraFocus.seq + 1) }),
+  setView: (view) => set({ view, cameraFocus: focusFor(get(), view, get().cameraFocus.seq + 1) }),
   setFilters: (patch) => set((s) => ({ filters: { ...s.filters, ...patch } })),
 }));

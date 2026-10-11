@@ -3,17 +3,34 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Grid } from '@react-three/drei';
 import * as THREE from 'three';
 import { useShallow } from 'zustand/react/shallow';
-import { POD_CENTER_Z, roomX, worldBounds } from '../data/layout';
-import { useMaestroStore, type SelectionKind } from '../store/useMaestroStore';
-import { cohortMatches, isLowStock } from '../store/selectors';
-import { ASSISTANT_STATUS, COHORT_STATUS, MATERIAL_COLOR, ROOM_STATUS, TRACK } from '../theme';
+import {
+  AUDIENCE,
+  CLASSROOM,
+  INTERVIEW_ROOM,
+  STAGE_ORDER,
+  STAGE_PLATFORM,
+  facilityCenter,
+  worldBounds,
+  zoneX,
+} from '../data/layout';
+import type { Facility } from '../data/types';
+import { useMaestroStore } from '../store/useMaestroStore';
+import { needsAttention, participantMatches } from '../store/selectors';
+import { STALLED_COLOR, STATUS, TEAM_PHASE } from '../theme';
 import { CameraRig } from './CameraRig';
-import { CampusModel } from './CampusModel';
-import { Cabinets, type SlotFill } from './Cabinets';
-import { CohortModel } from './CohortModel';
-import { RobotModel } from './RobotModel';
-import { RoomModel } from './RoomModel';
-import { computeCohortPlacements } from './placement';
+import { Participants, type Figure } from './Participants';
+import { computeSpots } from './placement';
+import {
+  FacilityHotspot,
+  Road,
+  SelectionZone,
+  ShowcaseZone,
+  StaffFigures,
+  StudyZone,
+  TrainingZone,
+  ZoneShell,
+  type TableTeam,
+} from './Zones';
 
 /**
  * The 3D view. This file only maps store state to visual props; the models
@@ -110,114 +127,125 @@ function Ground() {
   );
 }
 
+/** Click-box size for each kind of facility. */
+function hotspotSize(f: Facility): [number, number, number] {
+  switch (f.kind) {
+    case 'booth':
+      return [7.5, 2.4, 6];
+    case 'interview':
+      return [INTERVIEW_ROOM.w, 3, INTERVIEW_ROOM.d];
+    case 'classroom':
+      return [CLASSROOM.w, 3, CLASSROOM.d];
+    case 'table':
+      return [6.2, 2.2, 6.2];
+    case 'stage':
+      return [STAGE_PLATFORM.w, 3, STAGE_PLATFORM.d];
+    case 'audience':
+      return [AUDIENCE.cols * AUDIENCE.dx, 1.8, AUDIENCE.rows * AUDIENCE.dz + 1];
+  }
+}
+
 function World() {
-  const { campuses, rooms, cohorts, assistants, sessions, materials, campusId, filters, selection, cameraFocus } =
-    useMaestroStore(
-      useShallow((s) => ({
-        campuses: s.campuses,
-        rooms: s.rooms,
-        cohorts: s.cohorts,
-        assistants: s.assistants,
-        sessions: s.sessions,
-        materials: s.materials,
-        campusId: s.campusId,
-        filters: s.filters,
-        selection: s.selection,
-        cameraFocus: s.cameraFocus,
-      })),
-    );
+  const { stages, facilities, participants, teams, view, filters, selection, cameraFocus } = useMaestroStore(
+    useShallow((s) => ({
+      stages: s.stages,
+      facilities: s.facilities,
+      participants: s.participants,
+      teams: s.teams,
+      view: s.view,
+      filters: s.filters,
+      selection: s.selection,
+      cameraFocus: s.cameraFocus,
+    })),
+  );
   const select = useMaestroStore((s) => s.select);
 
-  const campusList = useMemo(() => Object.values(campuses), [campuses]);
-  const bounds = useMemo(() => worldBounds(campusList.length), [campusList.length]);
-  const placements = useMemo(() => computeCohortPlacements(cohorts, rooms, campuses), [cohorts, rooms, campuses]);
+  const bounds = useMemo(() => worldBounds(), []);
+  const spots = useMemo(() => computeSpots(participants, facilities), [participants, facilities]);
 
-  const slots = useMemo(() => {
-    const m = new Map<string, SlotFill>();
-    for (const it of Object.values(materials)) {
-      const { aisle, bay, level } = it.location;
-      m.set(`${it.campusId}:${aisle}:${bay}:${level}`, {
-        fill: Math.max(0.25, Math.min(1, it.quantity / (it.reorderPoint * 3))),
-        low: isLowStock(it),
-        color: MATERIAL_COLOR[it.category],
-      });
+  const figures = useMemo<Figure[]>(
+    () =>
+      Object.values(participants)
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map((p) => ({
+          id: p.id,
+          spot: spots[p.id],
+          color: STATUS[p.status].color,
+          visible: participantMatches(p, teams, filters),
+          alert: needsAttention(p, teams),
+        })),
+    [participants, spots, teams, filters],
+  );
+
+  const occupied = useMemo(() => {
+    const set = new Set(Object.values(participants).map((p) => p.facilityId));
+    return ['classroom-1', 'classroom-2', 'classroom-3'].map((id) => set.has(id));
+  }, [participants]);
+
+  const tables = useMemo<(TableTeam | null)[]>(
+    () =>
+      Array.from({ length: 8 }, (_, i) => {
+        const team = Object.values(teams).find((t) => t.tableId === `table-${i + 1}`);
+        if (!team) return null;
+        return {
+          name: team.name,
+          progress: team.progress / 100,
+          color: team.stalled ? STALLED_COLOR : TEAM_PHASE[team.phase].color,
+        };
+      }),
+    [teams],
+  );
+
+  const presenting = useMemo(() => Object.values(teams).some((t) => t.phase === 'presenting'), [teams]);
+
+  // A selected team highlights its table (or the stage while it presents).
+  const highlighted = useMemo(() => {
+    if (selection?.kind === 'facility') return selection.id;
+    if (selection?.kind === 'team') {
+      const t = teams[selection.id];
+      if (t?.tableId) return t.tableId;
+      if (t?.phase === 'presenting') return 'stage-1';
+      if (t?.phase === 'ready') return 'audience-1';
     }
-    return m;
-  }, [materials]);
+    return null;
+  }, [selection, teams]);
 
   // Stable callbacks so memoised models don't re-render when the store ticks.
-  const selectCohort = useCallback((id: string) => select({ kind: 'cohort', id }), [select]);
-  const selectAssistant = useCallback((id: string) => select({ kind: 'assistant', id }), [select]);
-  const selectRoom = useCallback((id: string) => select({ kind: 'room', id }), [select]);
-  const selectCabinet = useCallback((id: string) => select({ kind: 'cabinet', id }), [select]);
-  const isSel = (kind: SelectionKind, id: string) => selection?.kind === kind && selection.id === id;
+  const selectParticipant = useCallback((id: string) => select({ kind: 'participant', id }), [select]);
+  const selectFacility = useCallback((id: string) => select({ kind: 'facility', id }), [select]);
 
   return (
     <>
       <CameraRig focus={cameraFocus} bounds={bounds} />
-
-      {campusList.map((campus) => (
-        <CampusModel key={campus.id} campus={campus} active={campusId === campus.id} />
+      <Road highlight={view} />
+      {STAGE_ORDER.map((id) => (
+        <ZoneShell key={id} stage={stages[id]} active={view === id} />
       ))}
+      <SelectionZone />
+      <TrainingZone occupied={occupied} />
+      <StudyZone tables={tables} />
+      <ShowcaseZone presenting={presenting} />
+      <StaffFigures />
 
-      <Cabinets
-        campuses={campusList}
-        slots={slots}
-        selectedKey={selection?.kind === 'cabinet' ? selection.id : null}
-        onSelect={selectCabinet}
+      {Object.values(facilities).map((f) => {
+        const c = facilityCenter(f);
+        return (
+          <FacilityHotspot
+            key={f.id}
+            id={f.id}
+            position={[zoneX(f.stage) + c.x, f.kind === 'stage' ? 0 : 0.1, c.z]}
+            size={hotspotSize(f)}
+            selected={highlighted === f.id}
+            onSelect={selectFacility}
+          />
+        );
+      })}
+
+      <Participants
+        figures={figures}
+        selectedId={selection?.kind === 'participant' ? selection.id : null}
+        onSelect={selectParticipant}
       />
-
-      {Object.values(rooms).map((r) => {
-        const o = campuses[r.campusId].origin;
-        return (
-          <RoomModel
-            key={r.id}
-            id={r.id}
-            x={o.x + roomX(r.index)}
-            z={o.z + POD_CENTER_Z}
-            inSession={r.status === 'in_session'}
-            statusColor={ROOM_STATUS[r.status].color}
-            selected={isSel('room', r.id)}
-            onSelect={selectRoom}
-          />
-        );
-      })}
-
-      {Object.values(cohorts).map((c) => {
-        const p = placements[c.id];
-        return (
-          <CohortModel
-            key={c.id}
-            id={c.id}
-            x={p.x}
-            z={p.z}
-            rot={p.rot}
-            seated={p.seated}
-            figures={Math.round(c.learners / 2)}
-            trackColor={TRACK[c.track].color}
-            statusColor={COHORT_STATUS[c.status].color}
-            visible={cohortMatches(c, sessions, filters)}
-            selected={isSel('cohort', c.id)}
-            onSelect={selectCohort}
-          />
-        );
-      })}
-
-      {Object.values(assistants).map((a) => {
-        const o = campuses[a.campusId].origin;
-        return (
-          <RobotModel
-            key={a.id}
-            id={a.id}
-            x={o.x + a.position.x}
-            z={o.z + a.position.z}
-            assisting={a.status === 'assisting'}
-            statusColor={ASSISTANT_STATUS[a.status].color}
-            selected={isSel('assistant', a.id)}
-            onSelect={selectAssistant}
-          />
-        );
-      })}
     </>
   );
 }
